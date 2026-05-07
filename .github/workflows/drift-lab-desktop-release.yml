@@ -256,18 +256,46 @@ jobs:
 
       - name: Tag and publish release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN:   ${{ github.token }}
           NEW_TAG:    ${{ needs.bump.outputs.tag }}
           NOTES_FILE: ${{ steps.notes.outputs.file }}
         run: |
           set -euo pipefail
-          # Tag the commit that triggered this workflow.
-          git tag "$NEW_TAG"
-          git push origin "$NEW_TAG"
 
-          # Create the release with all bundles attached. `gh` accepts a glob
-          # so the matrix's per-runner uploads land in one release.
-          gh release create "$NEW_TAG" \
-            --title "$NEW_TAG" \
-            --notes-file "$NOTES_FILE" \
-            dist/*
+          # upload-artifact preserves directory structure under the least common
+          # ancestor of the input paths. The Linux artifact's `deb/` and
+          # `appimage/` subdirs survive into dist/. Use `find` instead of
+          # `dist/*` so we enumerate files (not directories), and use a bash
+          # array so filenames containing spaces (e.g. "Drift Lab_*.dmg")
+          # survive intact.
+          mapfile -t files < <(find dist -type f \
+            \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \))
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no bundle files found under dist/"
+            ls -laR dist/ || true
+            exit 1
+          fi
+
+          echo "Attaching ${#files[@]} bundle(s) to ${NEW_TAG}:"
+          printf '  %s\n' "${files[@]}"
+
+          # Idempotent tag push — re-runs after a partial failure shouldn't error.
+          if git ls-remote --exit-code --tags origin "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already on origin — skipping tag creation"
+          else
+            git tag "$NEW_TAG"
+            git push origin "$NEW_TAG"
+          fi
+
+          # Idempotent release — if a prior run created the release but failed
+          # mid-upload, reuse it and overwrite any partial assets via --clobber.
+          if gh release view "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Release $NEW_TAG already exists — refreshing assets"
+            gh release upload "$NEW_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$NEW_TAG" \
+              --title "$NEW_TAG" \
+              --notes-file "$NOTES_FILE" \
+              "${files[@]}"
+          fi
