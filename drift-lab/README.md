@@ -17,6 +17,22 @@ That's the daily loop. Everything else is below.
 
 ---
 
+## From zero to running
+
+```sh
+git clone https://github.com/waste-labs/drift.git
+cd drift/drift-lab
+make setup      # one-time: rustup + tauri-cli + icons + npm deps (~5 min)
+make            # opens the native app with hot reload
+```
+
+Once `setup` is done, only `make` is needed day-to-day. Edit a `.tsx` and the
+webview hot-reloads; edit a `.rs` and the binary rebuilds + relaunches.
+
+Run `make help` for the full target list, grouped by purpose.
+
+---
+
 ## First-time setup
 
 ```sh
