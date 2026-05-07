@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   action:
@@ -57,3 +58,284 @@ jobs:
       - name: Test
         working-directory: web-app
         run: bun test src/__tests__
+
+  # ---------------------------------------------------------------------------
+  # drift-lab / bump: decide the next drift-lab-v* tag.
+  # Skipped on pull_request events; only runs on push to main + workflow_dispatch.
+  # ---------------------------------------------------------------------------
+  drift-lab-bump:
+    name: drift-lab / compute version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Serialize so back-to-back main pushes can't race on git tag.
+    concurrency:
+      group: drift-lab-release
+      cancel-in-progress: false
+    outputs:
+      skip:    ${{ steps.bump.outputs.skip }}
+      tag:     ${{ steps.bump.outputs.tag }}
+      prev:    ${{ steps.bump.outputs.prev }}
+      version: ${{ steps.bump.outputs.version }}
+      bump:    ${{ steps.bump.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next drift-lab version
+        id: bump
+        run: |
+          set -euo pipefail
+
+          last_tag=$(git tag --list 'drift-lab-v*.*.*' --sort=-v:refname | head -n 1 || true)
+          if [ -z "$last_tag" ]; then
+            range="HEAD"
+            prev="drift-lab-v0.0.0"
+          else
+            range="${last_tag}..HEAD"
+            prev="$last_tag"
+          fi
+
+          # Only commits that actually touched drift-lab/ count for a release.
+          relevant=$(git log "$range" --no-merges --pretty=format:'%H' -- drift-lab/ || true)
+          if [ -z "$relevant" ]; then
+            echo "No drift-lab commits since $prev — skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Conventional-commit bump:
+          #   BREAKING CHANGE / feat!: / fix!: → major
+          #   feat: → minor
+          #   anything else → patch
+          bump="patch"
+          while IFS= read -r sha; do
+            msg=$(git log -1 --format='%s%n%b' "$sha")
+            if echo "$msg" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.*\))?!:'; then
+              bump="major"; break
+            elif echo "$msg" | grep -qE '^feat(\(.*\))?:'; then
+              [ "$bump" = "patch" ] && bump="minor"
+            fi
+          done <<< "$relevant"
+
+          ver="${prev#drift-lab-v}"
+          IFS='.' read -r major minor patch <<< "$ver"
+          case "$bump" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            patch) patch=$((patch+1)) ;;
+          esac
+          new_version="${major}.${minor}.${patch}"
+          new_tag="drift-lab-v${new_version}"
+
+          {
+            echo "skip=false"
+            echo "tag=$new_tag"
+            echo "prev=$prev"
+            echo "version=$new_version"
+            echo "bump=$bump"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Releasing $new_tag (bump=$bump, prev=$prev)"
+
+  # ---------------------------------------------------------------------------
+  # drift-lab / build: matrix build for macOS universal + Linux x86_64.
+  # ---------------------------------------------------------------------------
+  drift-lab-build:
+    name: drift-lab / build / ${{ matrix.label }}
+    needs: drift-lab-bump
+    if: needs.drift-lab-bump.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            label: macos-universal
+            tauri_args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundle_dir: universal-apple-darwin/release/bundle
+          - runner: ubuntu-22.04
+            label: linux-x86_64
+            tauri_args: ''
+            rust_targets: x86_64-unknown-linux-gnu
+            bundle_dir: release/bundle
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            pkg-config \
+            build-essential \
+            file
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: drift-lab/desktop-ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: drift-lab/src-tauri -> target
+          key: release-${{ matrix.label }}
+
+      - name: Cache cargo-tauri binary
+        id: tauri-cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-tauri (on cache miss)
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Install frontend deps
+        working-directory: drift-lab/desktop-ui
+        run: npm ci
+
+      - name: Build desktop app (release)
+        working-directory: drift-lab
+        run: cargo tauri build ${{ matrix.tauri_args }}
+
+      - name: Upload macOS bundles
+        if: startsWith(matrix.runner, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-lab-${{ matrix.label }}
+          path: drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux .deb
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-lab-${{ matrix.label }}-deb
+          path: drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/deb/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux .AppImage
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-lab-${{ matrix.label }}-appimage
+          path: drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # drift-lab / publish: gather artifacts, tag, create GitHub Release.
+  # ---------------------------------------------------------------------------
+  drift-lab-publish:
+    name: drift-lab / publish ${{ needs.drift-lab-bump.outputs.tag }}
+    needs: [drift-lab-bump, drift-lab-build]
+    if: needs.drift-lab-bump.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: drift-lab-*
+          merge-multiple: true
+          path: dist
+
+      - name: List downloaded assets
+        run: ls -la dist/
+
+      - name: Generate release notes
+        id: notes
+        env:
+          NEW_TAG: ${{ needs.drift-lab-bump.outputs.tag }}
+          PREV_TAG: ${{ needs.drift-lab-bump.outputs.prev }}
+          BUMP: ${{ needs.drift-lab-bump.outputs.bump }}
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/notes.md"
+
+          if [ "$PREV_TAG" = "drift-lab-v0.0.0" ] || ! git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            range="HEAD"
+            prev_label="(initial release)"
+          else
+            range="${PREV_TAG}..HEAD"
+            prev_label="${PREV_TAG}"
+          fi
+
+          {
+            echo "## Drift Lab $NEW_TAG"
+            echo
+            echo "Built for **macOS** (Apple Silicon + Intel) and **Linux** (x86_64). Bump: \`$BUMP\`."
+            echo
+            echo "### Install"
+            echo "- **macOS arm64** — \`Drift Lab_*_aarch64.dmg\`"
+            echo "- **macOS Intel** — \`Drift Lab_*_x64.dmg\`"
+            echo "- **Debian/Ubuntu** — \`sudo dpkg -i drift-lab_*_amd64.deb\`"
+            echo "- **Other Linux** — \`chmod +x drift-lab_*.AppImage && ./drift-lab_*.AppImage\`"
+            echo
+            echo "### Changes since $prev_label"
+            git log "$range" --no-merges --pretty='- %s (%h)' -- drift-lab/ | head -200
+          } > "$notes_file"
+
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and publish release
+        env:
+          GH_TOKEN:   ${{ github.token }}
+          NEW_TAG:    ${{ needs.drift-lab-bump.outputs.tag }}
+          NOTES_FILE: ${{ steps.notes.outputs.file }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t files < <(find dist -type f \
+            \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \))
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no bundle files found under dist/"
+            ls -laR dist/ || true
+            exit 1
+          fi
+
+          echo "Attaching ${#files[@]} bundle(s) to ${NEW_TAG}:"
+          printf '  %s\n' "${files[@]}"
+
+          # Idempotent tag push — re-runs after a partial failure won't error.
+          if git ls-remote --exit-code --tags origin "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already on origin — skipping tag creation"
+          else
+            git tag "$NEW_TAG"
+            git push origin "$NEW_TAG"
+          fi
+
+          # Idempotent release — reuse and overwrite partial assets via --clobber.
+          if gh release view "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Release $NEW_TAG already exists — refreshing assets"
+            gh release upload "$NEW_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$NEW_TAG" \
+              --title "$NEW_TAG" \
+              --notes-file "$NOTES_FILE" \
+              "${files[@]}"
+          fi
