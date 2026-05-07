@@ -33,32 +33,52 @@ Run `make help` for the full target list, grouped by purpose.
 
 ### Get a pre-built binary
 
-If you don't want to compile locally, every push to `main` produces installable
-bundles attached to a [GitHub Release](https://github.com/refactor-labs-pub/drift/releases)
-under a `drift-lab-vX.Y.Z` tag:
+Every push to `main` produces installable bundles attached to a
+[GitHub Release](https://github.com/refactor-labs-pub/drift/releases) under a
+`drift-lab-vX.Y.Z` tag:
 
-- **macOS** (both Apple Silicon and Intel) — `Drift Lab_*.dmg`
-- **Debian / Ubuntu** — `drift-lab_*_amd64.deb`
-- **Other Linux** — `drift-lab_*_amd64.AppImage`
+| Platform | File |
+| -------- | ---- |
+| **macOS** (Apple Silicon + Intel, single fat `.dmg`) | `Drift Lab_*.dmg` |
+| **Debian / Ubuntu**                                  | `drift-lab_*_amd64.deb` |
+| **Other Linux** (portable, no install)               | `drift-lab_*_amd64.AppImage` |
 
-#### Install commands
+#### macOS — first-launch Gatekeeper warning
+
+Drift Lab is **open source** (MIT) and not signed with a paid Apple Developer
+ID, so the first time you open it macOS will show:
+
+> *"Drift Lab" Not Opened — Apple could not verify "Drift Lab" is free of malware…*
+
+This is expected for any unsigned, un-notarized app. Two ways past it:
 
 ```sh
-# macOS — open the DMG, drag Drift Lab.app to /Applications.
-open ~/Downloads/Drift\ Lab_*_*.dmg
+# Option A — drag to Applications, then clear the quarantine flag once:
+open ~/Downloads/Drift\ Lab_*.dmg                              # open the DMG
+cp -R "/Volumes/Drift Lab/Drift Lab.app" /Applications/
+xattr -dr com.apple.quarantine "/Applications/Drift Lab.app"
+open "/Applications/Drift Lab.app"
+```
 
-# Debian / Ubuntu
+```sh
+# Option B — right-click the .app, choose "Open", then click "Open" again
+# in the dialog. macOS remembers the exception going forward.
+```
+
+The `xattr -dr com.apple.quarantine` trick removes the `com.apple.quarantine`
+extended attribute that Safari (and other browsers) attach to downloaded
+files. macOS's Gatekeeper only blocks unsigned apps that carry that flag.
+
+#### Linux
+
+```sh
+# Debian / Ubuntu / derivatives
 sudo dpkg -i ~/Downloads/drift-lab_*_amd64.deb
 
-# Other Linux distributions (AppImage runs portably, no install)
+# Anywhere else (AppImage is portable, no install)
 chmod +x ~/Downloads/drift-lab_*_amd64.AppImage
 ~/Downloads/drift-lab_*_amd64.AppImage
 ```
-
-> **Note**: macOS may flag the app as untrusted on first launch since the
-> bundle isn't yet code-signed. Right-click → Open, or run
-> `xattr -dr com.apple.quarantine /Applications/Drift\ Lab.app` to clear the
-> quarantine flag.
 
 ---
 

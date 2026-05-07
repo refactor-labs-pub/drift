@@ -46,7 +46,7 @@ RESET  := \033[0m
         install install-js install-rust install-tauri-cli check-rust \
         icons \
         compile compile-mac compile-linux \
-        open clean distclean help
+        open trust clean distclean help
 
 # === Tier 1 — the 3 commands ================================================
 
@@ -177,6 +177,21 @@ else
 	@printf "$(YELLOW)!$(RESET) make open is macOS-only; on Linux launch the AppImage directly\n"; exit 1
 endif
 
+trust: ## macOS: clear com.apple.quarantine on the installed .app (Gatekeeper bypass)
+ifeq ($(UNAME_S),Darwin)
+	@APP="/Applications/Drift Lab.app"; \
+	if [ ! -d "$$APP" ]; then APP="$(BUNDLE_MAC)"; fi; \
+	if [ ! -d "$$APP" ]; then \
+		printf "$(YELLOW)!$(RESET) Drift Lab.app not found in /Applications or build dir.\n"; \
+		printf "    install it first: open the .dmg and drag to Applications.\n"; exit 1; \
+	fi; \
+	printf "$(BLUE)▶$(RESET) clearing com.apple.quarantine on %s\n" "$$APP"; \
+	xattr -dr com.apple.quarantine "$$APP" && \
+	printf "$(GREEN)✓$(RESET) Drift Lab is now trusted — open normally.\n"
+else
+	@printf "$(YELLOW)!$(RESET) make trust is macOS-only (Gatekeeper is a macOS feature)\n"; exit 1
+endif
+
 # === Cleanup =================================================================
 
 clean: ## Remove build outputs (keeps node_modules + cargo cache)
@@ -206,6 +221,6 @@ help: ## Show this help
 	@grep -hE '^(compile-mac|compile-linux):.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
 	@printf "\n  $(GREEN)Launch / cleanup$(RESET)\n"
-	@grep -hE '^(open|clean|distclean|help):.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -hE '^(open|trust|clean|distclean|help):.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
 	@printf "\n"

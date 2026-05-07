@@ -40,7 +40,15 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Profile Dockerized services with one click.",
-    "longDescription": "Drift Lab attaches a profiler to a running Docker workload, drives load, and ranks performance issues from the resulting flame graph."
+    "longDescription": "Drift Lab attaches a profiler to a running Docker workload, drives load, and ranks performance issues from the resulting flame graph.",
+    "copyright": "Copyright © 2026 refactor-labs · MIT licensed",
+    "publisher": "refactor-labs",
+    "homepage": "https://github.com/refactor-labs-pub/drift",
+    "license": "MIT",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-"
+    }
   },
   "plugins": {
     "updater": {

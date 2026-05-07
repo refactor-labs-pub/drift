@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Drift Lab — desktop app for profiling Dockerized services",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
