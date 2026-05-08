@@ -46,7 +46,7 @@ RESET  := \033[0m
         install install-js install-rust install-tauri-cli check-rust \
         icons \
         compile compile-mac compile-linux \
-        open trust clean distclean help
+        open trust updater-keys clean distclean help
 
 # === Tier 1 — the 3 commands ================================================
 
@@ -176,6 +176,9 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@printf "$(YELLOW)!$(RESET) make open is macOS-only; on Linux launch the AppImage directly\n"; exit 1
 endif
+
+updater-keys: ## Generate the Ed25519 keypair for the in-app auto-updater (one-time)
+	@bash scripts/generate-updater-keys.sh
 
 trust: ## macOS: clear com.apple.quarantine on the installed .app (Gatekeeper bypass)
 ifeq ($(UNAME_S),Darwin)

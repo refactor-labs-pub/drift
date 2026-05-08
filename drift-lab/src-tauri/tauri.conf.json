@@ -53,8 +53,13 @@
   "plugins": {
     "updater": {
       "active": false,
-      "endpoints": [],
-      "pubkey": ""
+      "endpoints": [
+        "https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_TAURI_SIGNER_PUBLIC_KEY",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

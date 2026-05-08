@@ -15,6 +15,9 @@
     "log:default",
     "opener:default",
     "opener:allow-open-url",
-    "window-state:default"
+    "store:default",
+    "window-state:default",
+    "updater:default",
+    "process:default"
   ]
 }

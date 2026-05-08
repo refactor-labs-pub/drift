@@ -187,6 +187,59 @@ docker run --rm --platform linux/amd64 \
 
 ---
 
+## Auto-update
+
+Drift Lab self-updates from GitHub Releases via the Tauri 2 updater plugin.
+On launch the app silently calls
+`https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json`,
+compares versions, and shows an "Update & relaunch" banner when a newer
+`drift-lab-v*` release exists. The same UI is also available in
+**Settings → Updates** with a manual "Check for updates" button.
+
+The updater verifies an **Ed25519 signature** on every download — separate
+from Apple code signing. Without a valid signature, the install is refused.
+This is the only chain of trust for an app that's not signed by an Apple
+Developer ID, so it's not optional.
+
+### One-time signing key setup
+
+```sh
+make updater-keys             # generates ~/.tauri/drift-lab.key + .pub
+```
+
+That script:
+
+1. Runs `cargo tauri signer generate -w ~/.tauri/drift-lab.key`.
+2. Prints the public key — paste it into
+   [`src-tauri/tauri.conf.json`](src-tauri/tauri.conf.json) under
+   `plugins.updater.pubkey`.
+3. Reminds you to push the private key to GitHub Actions:
+
+   ```sh
+   gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/drift-lab.key
+   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # only if you set one
+   ```
+
+After that, every push to `main` produces signed bundles + a `latest.json`
+manifest attached to the GitHub Release. Existing installs see the new
+version on next launch and can update with a single click.
+
+> **Lost the private key?** Generate a new one and ship a build with the
+> new public key. Existing installs won't auto-update past the rotation —
+> users will have to reinstall once. The key never leaves your machine and
+> the GitHub secret store, so this is rare.
+
+### What the user sees
+
+- **Home screen** — a non-blocking banner top-left when an update is
+  available. Click *Update & relaunch* to apply.
+- **Settings → Updates** — current version, manual check button,
+  release notes, download progress.
+
+The download streams in the background via Rust (no CSP impact); install
+swaps the `.app` / AppImage in place; `tauri-plugin-process::relaunch()`
+brings the new binary back up.
+
 ## Continuous integration
 
 Two GitHub Actions workflows at the repo root, both scoped via `paths:` so

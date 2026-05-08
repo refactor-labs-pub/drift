@@ -7,6 +7,8 @@ import Orbs from "../components/Orbs";
 import RunButton from "../components/RunButton";
 import SearchBox from "../components/SearchBox";
 import Steps from "../components/Steps";
+import UpdateBanner from "../components/UpdateBanner";
+import { SettingsIcon } from "../components/icons";
 import {
   onRunComplete,
   onRunError,
@@ -74,6 +76,19 @@ export default function HomePage() {
   return (
     <div className="stage">
       <Orbs />
+
+      <div className="home-update-slot">
+        <UpdateBanner compact />
+      </div>
+
+      <button
+        type="button"
+        className="settings-fab"
+        aria-label="Settings"
+        onClick={() => navigate("/settings")}
+      >
+        <SettingsIcon />
+      </button>
 
       {view === "idle" && (
         <>

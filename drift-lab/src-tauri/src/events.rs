@@ -40,4 +40,24 @@ pub mod topic {
     pub const STEP: &str = "run://step";
     pub const COMPLETE: &str = "run://complete";
     pub const ERROR: &str = "run://error";
+
+    pub const BACKEND_STATUS: &str = "backend:status";
+}
+
+/// Coarse lifecycle of the LLM backend, broadcast as `backend:status` events.
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum BackendStatus {
+    /// No persisted config — the welcome path.
+    Unconfigured,
+    /// Config persisted but the runtime (client / llama-server) hasn't been resolved yet.
+    Idle { mode: String, model: String },
+    /// Pulling a GGUF from HuggingFace.
+    Downloading { file: String },
+    /// llama-server spawned, waiting for the OpenAI-compatible endpoint to come up.
+    Starting,
+    /// Ready to take chat requests.
+    Ready { mode: String, model: String },
+    /// Last resolve attempt failed.
+    Error { message: String },
 }

@@ -219,14 +219,29 @@ jobs:
 
       - name: Build desktop app (release)
         working-directory: drift-lab
-        run: cargo tauri build ${{ matrix.tauri_args }}
+        env:
+          # Ed25519 signing keypair for tauri-plugin-updater. Without these the
+          # updater plugin still works at runtime but every download will fail
+          # signature verification — so absence of the secret is a soft warning,
+          # not a build failure (a release without sigs ships, but auto-update
+          # won't accept it).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY not set — bundles will be unsigned and the in-app updater will reject them."
+          fi
+          cargo tauri build ${{ matrix.tauri_args }}
 
-      - name: Upload macOS bundles
+      - name: Upload macOS bundles (.dmg + .sig)
         if: startsWith(matrix.runner, 'macos')
         uses: actions/upload-artifact@v4
         with:
           name: drift-lab-${{ matrix.label }}
-          path: drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/dmg/*.dmg
+          path: |
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/dmg/*.dmg
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/macos/*.app.tar.gz
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/macos/*.app.tar.gz.sig
           if-no-files-found: error
           retention-days: 7
 
@@ -239,12 +254,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload Linux .AppImage
+      - name: Upload Linux .AppImage (+ .sig + tar.gz updater bundle)
         if: matrix.runner == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
           name: drift-lab-${{ matrix.label }}-appimage
-          path: drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/appimage/*.AppImage
+          path: |
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/appimage/*.AppImage
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/appimage/*.AppImage.tar.gz
+            drift-lab/src-tauri/target/${{ matrix.bundle_dir }}/appimage/*.AppImage.tar.gz.sig
           if-no-files-found: error
           retention-days: 7
 
@@ -279,6 +297,63 @@ jobs:
           # Move every bundle file up to dist/ so gh release create gets flat paths.
           find dist -mindepth 2 -type f -exec mv -v {} dist/ \;
           find dist -mindepth 1 -type d -empty -delete
+
+      - name: Build latest.json (updater manifest)
+        env:
+          NEW_TAG: ${{ needs.drift-lab-bump.outputs.tag }}
+          VERSION: ${{ needs.drift-lab-bump.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Tauri's updater on macOS / Linux downloads a tar.gz of the bundle
+          # signed with TAURI_SIGNING_PRIVATE_KEY. The .sig file is the entire
+          # signature payload (single line, base64). We drop a `latest.json`
+          # next to the bundles describing each platform's URL + signature.
+          base="https://github.com/${{ github.repository }}/releases/download/${NEW_TAG}"
+
+          # Helpers — first match for a glob, or empty.
+          first() { ls -1 dist/$1 2>/dev/null | head -n1 || true; }
+          read_sig() { [ -n "$1" ] && [ -f "$1" ] && cat "$1" || true; }
+
+          mac_bundle="$(first '*.app.tar.gz')"
+          mac_sig_file="$(first '*.app.tar.gz.sig')"
+          linux_bundle="$(first '*.AppImage.tar.gz')"
+          linux_sig_file="$(first '*.AppImage.tar.gz.sig')"
+
+          mac_sig="$(read_sig "$mac_sig_file")"
+          linux_sig="$(read_sig "$linux_sig_file")"
+
+          if [ -z "$mac_sig" ] && [ -z "$linux_sig" ]; then
+            echo "::warning::No updater signatures found — skipping latest.json (TAURI_SIGNING_PRIVATE_KEY likely unset). Bundles still ship; auto-update will report 'no update' instead of installing untrusted content."
+            exit 0
+          fi
+
+          notes="See https://github.com/${{ github.repository }}/releases/tag/${NEW_TAG}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          # Assemble platforms object. Unsigned legs are simply omitted.
+          platforms="{}"
+          if [ -n "$mac_sig" ] && [ -n "$mac_bundle" ]; then
+            url="${base}/$(basename "$mac_bundle")"
+            platforms=$(jq -n --arg sig "$mac_sig" --arg url "$url" \
+              '{"darwin-x86_64": {signature: $sig, url: $url}, "darwin-aarch64": {signature: $sig, url: $url}}')
+          fi
+          if [ -n "$linux_sig" ] && [ -n "$linux_bundle" ]; then
+            url="${base}/$(basename "$linux_bundle")"
+            platforms=$(echo "$platforms" | jq --arg sig "$linux_sig" --arg url "$url" \
+              '. + {"linux-x86_64": {signature: $sig, url: $url}}')
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg pub_date "$pub_date" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > dist/latest.json
+
+          echo "Built latest.json:"
+          cat dist/latest.json
 
       - name: Generate release notes
         id: notes
@@ -323,8 +398,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Bundles users download manually + the updater manifest + the
+          # tar.gz updater bundles + their detached signatures. The plugin
+          # fetches `latest.json` first, then the platform tar.gz it points
+          # to. Manual installers (.dmg / .deb / .AppImage) stay too.
           mapfile -t files < <(find dist -maxdepth 1 -type f \
-            \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \))
+            \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \
+            -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
+            -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
+            -o -name "latest.json" \))
 
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::no bundle files found under dist/"
