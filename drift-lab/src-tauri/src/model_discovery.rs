@@ -90,15 +90,49 @@ pub struct DiscoveredRuntime {
     pub note: Option<String>,
 }
 
+/// Resolve the `docker` binary. macOS GUI apps launched from Finder/Dock
+/// inherit a stripped PATH (no `/usr/local/bin`, no `/opt/homebrew/bin`), so
+/// `Command::new("docker")` fails for the bundled .app even though `docker`
+/// works fine in the user's shell. Fall back to the well-known install
+/// locations before giving up.
+fn resolve_docker_binary() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    // 1. PATH — fast path for `make dev` and any env where PATH is sane.
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            let candidate = PathBuf::from(dir).join("docker");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    // 2. Well-known install locations (macOS + Linux).
+    let fallbacks = [
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "/usr/bin/docker",
+    ];
+    fallbacks
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+}
+
 /// Run `docker model list --openai` with a tight timeout and parse the
 /// OpenAI-shaped model list. Returns `None` if Docker isn't installed, the
 /// daemon is down, or Docker Model Runner isn't enabled — i.e. anything that
 /// makes the command fail. Drift-lab doesn't surface those as errors because
 /// they're the normal "no DMR here" path.
 async fn probe_docker_model_runner_cli() -> Option<Vec<String>> {
+    let Some(docker) = resolve_docker_binary() else {
+        tracing::debug!("docker binary not found in PATH or known install locations");
+        return None;
+    };
+
     let output = tokio::time::timeout(
         Duration::from_secs(2),
-        tokio::process::Command::new("docker")
+        tokio::process::Command::new(&docker)
             .args(["model", "list", "--openai"])
             .output(),
     )
@@ -108,6 +142,7 @@ async fn probe_docker_model_runner_cli() -> Option<Vec<String>> {
 
     if !output.status.success() {
         tracing::debug!(
+            docker = %docker.display(),
             stderr = %String::from_utf8_lossy(&output.stderr),
             "docker model list --openai exited non-zero"
         );
@@ -116,11 +151,18 @@ async fn probe_docker_model_runner_cli() -> Option<Vec<String>> {
 
     let body: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let data = body.get("data")?.as_array()?;
-    Some(
-        data.iter()
-            .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
-            .collect(),
-    )
+    let models: Vec<String> = data
+        .iter()
+        .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    if !models.is_empty() {
+        tracing::info!(
+            docker = %docker.display(),
+            count = models.len(),
+            "docker model runner detected via CLI fallback"
+        );
+    }
+    Some(models)
 }
 
 /// Probe every preset that looks like a local OpenAI-compatible runtime —
@@ -195,9 +237,10 @@ pub async fn probe_local_runtimes() -> Vec<DiscoveredRuntime> {
                     base_url: p.base_url.to_string(),
                     models: cli_models,
                     note: Some(
-                        "Detected via `docker model list` but the HTTP endpoint at \
-                         localhost:12434 isn't reachable. Enable \"Host-side TCP support\" in \
-                         Docker Desktop → Settings → AI to use these models."
+                        "Docker Model Runner is running but localhost:12434 isn't \
+                         reachable. In Docker Desktop → Settings → AI, enable \
+                         \"Host-side TCP support\" (port 12434) and click \
+                         \"Apply & Restart\" — the toggle alone doesn't take effect."
                             .to_string(),
                     ),
                 });

@@ -29,7 +29,6 @@ static EMITTER: OnceLock<BlockedEmitter> = OnceLock::new();
 static PENDING: Mutex<Option<PendingEntry>> = Mutex::new(None);
 
 struct PendingEntry {
-    id: String,
     tx: oneshot::Sender<String>,
 }
 
@@ -48,7 +47,7 @@ pub async fn ask(question: String) -> Result<String, String> {
         // Overwriting a previous PendingEntry drops its sender, which
         // causes the awaiting `rx.await` in *that* run to return `Err`.
         // That run was cancelled or crashed; this is the cleanup.
-        *slot = Some(PendingEntry { id: id.clone(), tx });
+        *slot = Some(PendingEntry { tx });
     }
     if let Some(emit) = EMITTER.get() {
         emit(BlockedQuestion {

@@ -11,6 +11,7 @@ import {
   saveProvider,
   testProvider,
 } from "../lib/tauri";
+import DockerSetupHint from "./DockerSetupHint";
 import Orbs from "./Orbs";
 
 type Step =
@@ -198,6 +199,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
                       Docker Desktop 4.40+
                     </a>{" "}
                     — enable in Settings → AI
+                    <DockerSetupHint variant="not-detected" />
                   </li>
                 </ul>
               </div>
@@ -217,6 +219,9 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
                         style={{ fontSize: 12, marginBottom: 8, fontStyle: "italic" }}
                       >
                         {rt.note}
+                        {rt.presetId === "docker-model-runner" && (
+                          <DockerSetupHint variant="needs-tcp" />
+                        )}
                       </div>
                     )}
                     {rt.models.length === 0 ? (

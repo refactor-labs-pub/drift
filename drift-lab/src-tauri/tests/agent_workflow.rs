@@ -403,6 +403,8 @@ fn describe_event(e: &CapturedEvent) -> String {
         CapturedEvent::Complete(c) => format!("Complete{{run_id:{}}}", c.run_id),
         CapturedEvent::Error(e) => format!("Error{{message:{}}}", e.message),
         CapturedEvent::Agent(a) => format!("Agent{{{a:?}}}"),
+        CapturedEvent::Telemetry(t) => format!("Telemetry{{{t:?}}}"),
+        CapturedEvent::Report(r) => format!("Report{{{r:?}}}"),
     }
 }
 

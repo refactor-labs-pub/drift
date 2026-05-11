@@ -1020,6 +1020,33 @@ button { font-family: inherit; }
   border-radius: 4px;
   font-size: 12.5px;
 }
+
+/* Docker Model Runner setup hint — collapsible details + screenshot */
+.docker-setup-hint {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.docker-setup-hint > summary {
+  cursor: pointer;
+  color: var(--accent, #c2410c);
+  font-weight: 500;
+  user-select: none;
+}
+.docker-setup-hint > summary:hover {
+  text-decoration: underline;
+}
+.docker-setup-hint-body {
+  color: var(--muted, #6b7280);
+  margin: 8px 0;
+}
+.docker-setup-hint-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  margin-top: 4px;
+}
 .install-cmd-row {
   display: flex;
   align-items: center;

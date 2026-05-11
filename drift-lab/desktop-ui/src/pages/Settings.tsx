@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import DockerSetupHint from "../components/DockerSetupHint";
 import Orbs from "../components/Orbs";
 import {
   AppConfig,
@@ -333,6 +334,7 @@ function LocalRuntimesTab({ refresh }: { refresh: () => Promise<void> }) {
                 Docker Desktop 4.40+
               </a>{" "}
               (enable in Settings → AI)
+              <DockerSetupHint variant="not-detected" />
             </li>
           </ul>
         </div>
@@ -352,6 +354,9 @@ function LocalRuntimesTab({ refresh }: { refresh: () => Promise<void> }) {
                 <p className="muted" style={{ marginTop: 0, marginBottom: 0, fontSize: 13 }}>
                   {rt.note}
                 </p>
+                {rt.presetId === "docker-model-runner" && (
+                  <DockerSetupHint variant="needs-tcp" />
+                )}
               </div>
             )}
             {rt.models.length === 0 ? (
