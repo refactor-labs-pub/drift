@@ -63,6 +63,9 @@ pub fn registry() -> Vec<RegisteredTool> {
 fn classify(name: &str) -> Permission {
     match name {
         // Pure observation: scan files, list containers, parse profiler output.
+        // `ask_user` lives here because it never mutates anything — it's a
+        // pause waiting on a human, which is always safe; the user is the
+        // approver by definition.
         "check_docker"
         | "list_directory"
         | "read_file_excerpt"
@@ -71,7 +74,8 @@ fn classify(name: &str) -> Permission {
         | "detect_runtime"
         | "find_test_runner_for_profiling"
         | "list_containers"
-        | "analyze_samples" => Permission::ReadOnly,
+        | "analyze_samples"
+        | "ask_user" => Permission::ReadOnly,
 
         // Anything that runs commands inside the container, writes files, or
         // launches a subprocess: requires approval in the default mode.
@@ -238,6 +242,11 @@ async fn dispatch_inner(name: &str, arguments: serde_json::Value) -> anyhow::Res
             let args: tools::copy_to_container::Args = serde_json::from_value(arguments)
                 .with_context(|| format!("invalid args for {n}"))?;
             serde_json::to_string(&tools::copy_to_container::run(args).await?)?
+        }
+        n if n == tools::ask_user::NAME => {
+            let args: tools::ask_user::Args = serde_json::from_value(arguments)
+                .with_context(|| format!("invalid args for {n}"))?;
+            serde_json::to_string(&tools::ask_user::run(args).await?)?
         }
         other => anyhow::bail!("unknown tool: {other}"),
     };

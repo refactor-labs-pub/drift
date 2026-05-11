@@ -74,7 +74,7 @@ pub enum Severity {
     Low,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub rank: u32,
     pub function: String,

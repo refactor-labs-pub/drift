@@ -14,15 +14,39 @@ mod presets;
 #[allow(dead_code)] // Trait + file-backed impl. Kept as the swap path to a future KeychainSecretStore.
 mod secret_store;
 mod state;
+mod telemetry;
+mod user_input;
 #[allow(dead_code)] // Each tool is independently callable by the LLM; not all are wired into workflow.rs yet.
 pub mod tools;
 mod tray;
 mod workflow;
 
-use tauri::Manager;
+use std::sync::{Arc, OnceLock};
+
+use tauri::{Emitter, Manager};
 use tracing::info;
 
-/// Initialise a `tracing` subscriber that writes formatted lines to stderr.
+use crate::events::LogLine;
+
+/// Bridge from the backend's `tracing` pipeline to the UI: every event that
+/// makes it past the `EnvFilter` is also packaged as a [`LogLine`] and pushed
+/// to whatever callback `register_log_emitter` last installed.
+///
+/// We use an `Arc<dyn Fn>` (not a direct `AppHandle`) so the
+/// `TauriEventLayer` stays generic — `AppHandle<R>` is `Runtime`-parameterised
+/// and would force the layer (and every test that touches tracing) to pick a
+/// runtime up front.
+type LogEmitter = Arc<dyn Fn(LogLine) + Send + Sync>;
+static LOG_EMITTER: OnceLock<LogEmitter> = OnceLock::new();
+
+fn register_log_emitter(emitter: impl Fn(LogLine) + Send + Sync + 'static) {
+    // `OnceLock::set` only succeeds the first time; subsequent setup runs
+    // (e.g. in tests) silently keep the original — that's fine here.
+    let _ = LOG_EMITTER.set(Arc::new(emitter));
+}
+
+/// Initialise a `tracing` subscriber that writes formatted lines to stderr
+/// *and* mirrors them to the UI via [`register_log_emitter`].
 ///
 /// `RUST_LOG` controls the filter (default `info,drift=debug` so the agent /
 /// tools / workflow log lines all show up while we keep external crates
@@ -30,15 +54,106 @@ use tracing::info;
 /// which is why we don't register `tauri-plugin-log` — both would race to set
 /// the global `log::set_logger` and the second one panics.
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,drift=debug,drift_lab_lib=debug"));
-    let _ = fmt()
-        .with_env_filter(filter)
+    let stderr_layer = fmt::layer()
         .with_target(true)
         .with_writer(std::io::stderr)
-        .compact()
+        .compact();
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer)
+        .with(TauriEventLayer)
         .try_init();
+}
+
+/// `tracing_subscriber::Layer` that forwards each filtered event to the
+/// registered emitter. No-op until the emitter is installed (which happens
+/// inside the Tauri `setup()` once an `AppHandle` is available).
+struct TauriEventLayer;
+
+impl<S> tracing_subscriber::Layer<S> for TauriEventLayer
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let Some(emitter) = LOG_EMITTER.get() else { return };
+        let meta = event.metadata();
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+        let line = LogLine {
+            ts_ms: chrono::Utc::now().timestamp_millis(),
+            level: meta.level().to_string(),
+            target: meta.target().to_string(),
+            message: visitor.into_string(),
+        };
+        emitter(line);
+    }
+}
+
+/// Field visitor that pulls out the `message` plus any `k=v` extras a
+/// `tracing::info!` invocation attached. We strip the surrounding quotes
+/// that `Debug` adds around string-like fields so the UI doesn't show
+/// `"scan workflow starting"` with literal quotes.
+#[derive(Default)]
+struct MessageVisitor {
+    message: String,
+    fields: Vec<(String, String)>,
+}
+
+impl MessageVisitor {
+    fn into_string(self) -> String {
+        let MessageVisitor {
+            mut message,
+            fields,
+        } = self;
+        if fields.is_empty() {
+            return message;
+        }
+        if !message.is_empty() {
+            message.push_str("  ");
+        }
+        for (i, (k, v)) in fields.iter().enumerate() {
+            if i > 0 {
+                message.push(' ');
+            }
+            use std::fmt::Write as _;
+            let _ = write!(message, "{k}={v}");
+        }
+        message
+    }
+
+    fn strip_debug_quotes(s: String) -> String {
+        if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+            s[1..s.len() - 1].to_string()
+        } else {
+            s
+        }
+    }
+}
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let raw = format!("{value:?}");
+        let cleaned = Self::strip_debug_quotes(raw);
+        if field.name() == "message" {
+            self.message = cleaned;
+        } else {
+            self.fields.push((field.name().to_string(), cleaned));
+        }
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else {
+            self.fields.push((field.name().to_string(), value.to_string()));
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -64,6 +179,24 @@ pub fn run() {
             if let Err(e) = tray::install(app.handle()) {
                 tracing::warn!("tray install failed: {e}");
             }
+
+            // Hook the tracing pipeline into Tauri's event bus so the UI's
+            // BackendLogPane can mirror what's printed to stderr. Installing
+            // the emitter here (not in `init_tracing`) means tests and CLI
+            // launches that never build an AppHandle keep getting the
+            // stderr-only behaviour.
+            let handle_for_log = app.handle().clone();
+            register_log_emitter(move |line| {
+                let _ = handle_for_log.emit(events::topic::LOG, line);
+            });
+
+            // Bridge the `ask_user` tool to the BlockedModal: the tool parks
+            // a oneshot and emits a question; this callback forwards the
+            // question payload over Tauri so the UI can render the modal.
+            let handle_for_blocked = app.handle().clone();
+            user_input::register_emitter(move |q| {
+                let _ = handle_for_blocked.emit(events::topic::BLOCKED, q);
+            });
 
             info!("drift-lab ready");
 
@@ -128,6 +261,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::start_run,
             commands::cancel_run,
+            commands::answer_blocked_question,
             // Single-provider (legacy) — kept for the existing Settings UI.
             commands::configure_backend,
             commands::save_backend_config,

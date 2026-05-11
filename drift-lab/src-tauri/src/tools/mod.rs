@@ -16,6 +16,7 @@
 //! every workflow.
 
 pub mod analyze_samples;
+pub mod ask_user;
 pub mod check_docker;
 pub mod copy_to_container;
 pub mod detect_runtime;
@@ -71,5 +72,9 @@ pub fn manifest() -> Vec<ToolManifest> {
         list_containers::manifest(),
         exec_in_container::manifest(),
         copy_to_container::manifest(),
+        // Meta — the agent calls this to park on a free-text human question
+        // when it genuinely can't proceed. Last in the list because it's
+        // the recovery hatch, not the happy path.
+        ask_user::manifest(),
     ]
 }

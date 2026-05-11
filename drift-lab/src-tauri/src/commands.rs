@@ -20,6 +20,16 @@ use crate::{
     workflow,
 };
 
+/// Resolve the currently-pending `ask_user` question with the operator's
+/// free-text answer. The agent's `ask_user` tool was parked on a oneshot;
+/// this command sends through it and the agent loop resumes with `answer`
+/// as the tool's content. Idempotent-ish — if no question is pending we
+/// return a friendly error so the UI can surface "nothing to answer".
+#[tauri::command]
+pub fn answer_blocked_question(answer: String) -> Result<(), String> {
+    crate::user_input::answer(answer)
+}
+
 #[tauri::command]
 pub async fn start_run<R: Runtime>(
     app: AppHandle<R>,
@@ -349,6 +359,16 @@ impl<R: Runtime> crate::agent::workflow::WorkflowSink for TauriWorkflowSink<R> {
         // Mirror the raw AgentEvent to the UI so the `ReasoningLog` panel
         // can render the streaming thoughts + tool dispatches.
         let _ = self.app.emit(topic::AGENT_EVENT, event);
+    }
+    fn emit_telemetry(&self, sample: crate::events::TelemetrySample) {
+        // ~2 Hz docker-stats snapshots → TelemetryPane on the right of the
+        // split-view running screen.
+        let _ = self.app.emit(topic::TELEMETRY, sample);
+    }
+    fn emit_report(&self, report: crate::events::RunReport) {
+        // Structured "visibility map" (critical issues + warnings + advice)
+        // that powers Report.tsx's VisibilityMapPanel.
+        let _ = self.app.emit(topic::REPORT, report);
     }
 }
 

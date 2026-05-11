@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import BackendLogPane from "../components/BackendLogPane";
+import BlockedModal from "../components/BlockedModal";
+import CollapsingTimeline from "../components/CollapsingTimeline";
 import DoneState from "../components/DoneState";
 import MagicOrb from "../components/MagicOrb";
 import Orbs from "../components/Orbs";
@@ -8,19 +11,25 @@ import ReasoningLog, { useAgentEvents } from "../components/ReasoningLog";
 import RunButton from "../components/RunButton";
 import ScanGoalPicker, { resolveGoalPrompt } from "../components/ScanGoalPicker";
 import SearchBox from "../components/SearchBox";
-import Steps from "../components/Steps";
+import TelemetryPane from "../components/TelemetryPane";
 import UpdateBanner from "../components/UpdateBanner";
 import { SettingsIcon } from "../components/icons";
 import {
   listPromptPresets,
+  onBlockedQuestion,
+  onLogLine,
   onRunComplete,
   onRunError,
+  onRunReport,
   onStepUpdate,
+  onTelemetrySample,
   type PromptPreset,
   selectProjectPath,
   startAgentRun,
 } from "../lib/tauri";
 import { useRunStore } from "../store/runStore";
+
+type RightTab = "telemetry" | "logs";
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -32,13 +41,24 @@ export default function HomePage() {
     error,
     result,
     steps,
+    visibilityMap,
+    blockedQuestion,
     beginRun,
     applyStep,
     finishRun,
     failRun,
     reset,
     setLogEntries,
+    pushTelemetry,
+    pushLogLine,
+    setBlockedQuestion,
+    setVisibilityMap,
   } = useRunStore();
+
+  /** Which signal the user is watching on the right pane while a scan runs.
+   *  Default is `telemetry` because that's the headline product story; logs
+   *  are the diagnostic switch you flip when something looks off. */
+  const [rightTab, setRightTab] = useState<RightTab>("telemetry");
 
   // Goal picker state. Local because it doesn't survive a run — once a scan
   // begins, the prompt is locked in. Reset() in DoneState clears the run but
@@ -75,11 +95,18 @@ export default function HomePage() {
     };
   }, []);
 
-  // Subscribe to backend events for the lifetime of the page.
+  // Subscribe to backend events for the lifetime of the page. Telemetry,
+  // report, blocked, and log listeners attach here (rather than inside the
+  // running view) so any event that lands between begin-run and the first
+  // render isn't lost.
   useEffect(() => {
     let stepUnsub: (() => void) | undefined;
     let doneUnsub: (() => void) | undefined;
     let errUnsub: (() => void) | undefined;
+    let telemUnsub: (() => void) | undefined;
+    let reportUnsub: (() => void) | undefined;
+    let logUnsub: (() => void) | undefined;
+    let blockedUnsub: (() => void) | undefined;
 
     (async () => {
       stepUnsub = await onStepUpdate((u) => {
@@ -87,14 +114,22 @@ export default function HomePage() {
       });
       doneUnsub = await onRunComplete((c) => finishRun(c));
       errUnsub = await onRunError((e) => failRun(e.message));
+      telemUnsub = await onTelemetrySample((s) => pushTelemetry(s));
+      reportUnsub = await onRunReport((r) => setVisibilityMap(r.map));
+      logUnsub = await onLogLine((line) => pushLogLine(line));
+      blockedUnsub = await onBlockedQuestion((q) => setBlockedQuestion(q));
     })();
 
     return () => {
       stepUnsub?.();
       doneUnsub?.();
       errUnsub?.();
+      telemUnsub?.();
+      reportUnsub?.();
+      logUnsub?.();
+      blockedUnsub?.();
     };
-  }, [applyStep, finishRun, failRun]);
+  }, [applyStep, finishRun, failRun, pushTelemetry, pushLogLine, setBlockedQuestion, setVisibilityMap]);
 
   const handleStart = async () => {
     if (isRunning) return;
@@ -191,10 +226,39 @@ export default function HomePage() {
       )}
 
       {view === "running" && (
-        <div className="loading-wrap">
-          <MagicOrb />
-          <Steps steps={steps} />
-          <ReasoningLog entries={agentEntries} />
+        <div className="running-split">
+          <div className="running-split-col running-split-col-left">
+            <MagicOrb />
+            <CollapsingTimeline steps={steps} />
+            <ReasoningLog entries={agentEntries} />
+          </div>
+          <div className="running-split-col running-split-col-right">
+            <div className="right-pane">
+              <div className="right-pane-tabs" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={rightTab === "telemetry"}
+                  className={`right-pane-tab${rightTab === "telemetry" ? " is-active" : ""}`}
+                  onClick={() => setRightTab("telemetry")}
+                >
+                  Telemetry
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={rightTab === "logs"}
+                  className={`right-pane-tab${rightTab === "logs" ? " is-active" : ""}`}
+                  onClick={() => setRightTab("logs")}
+                >
+                  Logs
+                </button>
+              </div>
+              <div className="right-pane-body">
+                {rightTab === "telemetry" ? <TelemetryPane /> : <BackendLogPane />}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -202,9 +266,17 @@ export default function HomePage() {
         <DoneState
           issuesFound={result.issuesFound}
           criticalCount={result.criticalCount}
+          visibilityMap={visibilityMap}
           onView={() => navigate(`/report/${result.runId}`)}
           onRerun={handleRerun}
           onReset={reset}
+        />
+      )}
+
+      {blockedQuestion && (
+        <BlockedModal
+          question={blockedQuestion}
+          onAnswered={() => setBlockedQuestion(null)}
         />
       )}
     </div>

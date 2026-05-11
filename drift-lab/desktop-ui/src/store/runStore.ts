@@ -1,7 +1,20 @@
 import { create } from "zustand";
 
 import type { Entry as AgentLogEntry } from "../components/ReasoningLog";
-import type { AgentMode } from "../lib/tauri";
+import type {
+  AgentMode,
+  BlockedQuestion,
+  LogLine,
+  TelemetrySample,
+  VisibilityMap,
+} from "../lib/tauri";
+
+/** Cap on retained samples. ~600 = 5 minutes at the backend's 2 Hz cadence —
+ *  any longer and the sparkline becomes unreadable anyway. */
+const TELEMETRY_CAP = 600;
+/** Cap on retained log lines. A debug-level scan can emit a few hundred per
+ *  minute; 2000 covers ~10 minutes before the oldest start rolling out. */
+const LOG_CAP = 2000;
 
 export type StepStatus = "pending" | "active" | "done" | "error";
 
@@ -41,6 +54,18 @@ interface RunStore {
   /** Streaming agent reasoning + tool log. Lives on the store so the Report
    *  page can read it after the live `Home` view unmounts. */
   logEntries: AgentLogEntry[];
+  /** Rolling-window telemetry samples for the live TelemetryPane sparklines.
+   *  Capped at {@link TELEMETRY_CAP}; oldest drop when full. */
+  telemetrySamples: TelemetrySample[];
+  /** Rolling-window backend tracing lines, mirroring what's on stderr.
+   *  Capped at {@link LOG_CAP}. */
+  backendLog: LogLine[];
+  /** Currently-in-flight `ask_user` question, or null. While set the
+   *  BlockedModal is open and the run is parked. */
+  blockedQuestion: BlockedQuestion | null;
+  /** Structured "visibility map" delivered just before `RunComplete`. Null
+   *  until the backend emits `run://report`. */
+  visibilityMap: VisibilityMap | null;
   /** Inputs to replay the same scan. Set when a run starts. */
   runParams: RunParams | null;
   /** Wall-clock UTC ms when the most-recent scan started — Report uses it to
@@ -57,14 +82,22 @@ interface RunStore {
   failRun: (message: string) => void;
   reset: () => void;
   setLogEntries: (entries: AgentLogEntry[]) => void;
+  pushTelemetry: (sample: TelemetrySample) => void;
+  pushLogLine: (line: LogLine) => void;
+  setBlockedQuestion: (q: BlockedQuestion | null) => void;
+  setVisibilityMap: (map: VisibilityMap) => void;
 }
 
+/** 6-stage UI timeline. The agent's internal 10-step recipe (in the system
+ *  prompt) maps onto these — each visible stage may bundle 1-2 internal
+ *  steps. Keep in sync with `agent::workflow::tool_to_step_index` in Rust. */
 const DEFAULT_STEPS: StepState[] = [
-  { title: "Locating Docker image",        detail: "Waiting…", status: "pending" },
-  { title: "Detecting language & runtime", detail: "Waiting…", status: "pending" },
-  { title: "Installing profiler",          detail: "Waiting…", status: "pending" },
-  { title: "Running profiling session",    detail: "Waiting…", status: "pending" },
-  { title: "Analyzing bottlenecks",        detail: "Waiting…", status: "pending" },
+  { title: "Understanding code",   detail: "Waiting…", status: "pending" },
+  { title: "Locating how to run",  detail: "Waiting…", status: "pending" },
+  { title: "Setting up runtime",   detail: "Waiting…", status: "pending" },
+  { title: "Running + profiling",  detail: "Waiting…", status: "pending" },
+  { title: "Building thesis",      detail: "Waiting…", status: "pending" },
+  { title: "Reporting",            detail: "Waiting…", status: "pending" },
 ];
 
 export const useRunStore = create<RunStore>((set) => ({
@@ -79,6 +112,10 @@ export const useRunStore = create<RunStore>((set) => ({
   steps: DEFAULT_STEPS.map((s) => ({ ...s })),
 
   logEntries: [],
+  telemetrySamples: [],
+  backendLog: [],
+  blockedQuestion: null,
+  visibilityMap: null,
   runParams: null,
   startedAt: null,
   endedAt: null,
@@ -91,6 +128,10 @@ export const useRunStore = create<RunStore>((set) => ({
       result: null,
       steps: DEFAULT_STEPS.map((s) => ({ ...s })),
       logEntries: [],
+      telemetrySamples: [],
+      backendLog: [],
+      blockedQuestion: null,
+      visibilityMap: null,
       runParams: params,
       startedAt: Date.now(),
       endedAt: null,
@@ -120,9 +161,31 @@ export const useRunStore = create<RunStore>((set) => ({
       result: null,
       steps: DEFAULT_STEPS.map((s) => ({ ...s })),
       logEntries: [],
+      telemetrySamples: [],
+      backendLog: [],
+      blockedQuestion: null,
+      visibilityMap: null,
       runParams: null,
       startedAt: null,
       endedAt: null,
     }),
   setLogEntries: (entries) => set({ logEntries: entries }),
+  pushTelemetry: (sample) =>
+    set((state) => {
+      const next = state.telemetrySamples.concat(sample);
+      if (next.length > TELEMETRY_CAP) {
+        next.splice(0, next.length - TELEMETRY_CAP);
+      }
+      return { telemetrySamples: next };
+    }),
+  pushLogLine: (line) =>
+    set((state) => {
+      const next = state.backendLog.concat(line);
+      if (next.length > LOG_CAP) {
+        next.splice(0, next.length - LOG_CAP);
+      }
+      return { backendLog: next };
+    }),
+  setBlockedQuestion: (q) => set({ blockedQuestion: q }),
+  setVisibilityMap: (map) => set({ visibilityMap: map }),
 }));

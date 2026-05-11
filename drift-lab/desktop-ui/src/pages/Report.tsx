@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import Orbs from "../components/Orbs";
 import type { Entry as AgentLogEntry } from "../components/ReasoningLog";
+import VisibilityMapPanel from "../components/VisibilityMapPanel";
 import { CheckIcon, STEP_ICONS, XIcon } from "../components/icons";
 import { startAgentRun } from "../lib/tauri";
 import { useRunStore } from "../store/runStore";
@@ -34,6 +35,7 @@ export default function ReportPage() {
     error,
     steps,
     logEntries,
+    visibilityMap,
     startedAt,
     endedAt,
     beginRun,
@@ -104,14 +106,18 @@ export default function ReportPage() {
 
         {haveData && (
           <>
-            {result && (
-              <div className="report-summary">
-                <div>
-                  <strong>{result.issuesFound}</strong> issues found
-                  {" · "}
-                  <strong>{result.criticalCount}</strong> critical
+            {visibilityMap ? (
+              <VisibilityMapPanel map={visibilityMap} />
+            ) : (
+              result && (
+                <div className="report-summary">
+                  <div>
+                    <strong>{result.issuesFound}</strong> issues found
+                    {" · "}
+                    <strong>{result.criticalCount}</strong> critical
+                  </div>
                 </div>
-              </div>
+              )
             )}
             {error && <div className="report-error">Error: {error}</div>}
 

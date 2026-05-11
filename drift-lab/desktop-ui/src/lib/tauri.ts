@@ -102,6 +102,110 @@ export async function onRunError(cb: (e: RunError) => void): Promise<() => void>
   return listen<RunError>("run://error", cb);
 }
 
+// ---------- Telemetry + visibility map ----------
+
+/** One container snapshot from the Rust-side `docker stats` poller. Counters
+ *  are absolute (cumulative bytes); the UI derives bytes/sec by diffing
+ *  successive samples in the same series. */
+export interface TelemetrySample {
+  runId: string;
+  tsMs: number;
+  containerId: string;
+  cpuPct: number;
+  memMb: number;
+  memPct: number;
+  netRxBytes: number;
+  netTxBytes: number;
+  blockReadBytes: number;
+  blockWriteBytes: number;
+}
+
+/** One ranked hotspot from `analyze_samples`. Mirrors the Rust `Issue` struct
+ *  in `tools/analyze_samples.rs` — keep in sync. */
+export type IssueCategory =
+  | "database"
+  | "network"
+  | "cpu"
+  | "lock"
+  | "gc"
+  | "serde"
+  | "filesystem"
+  | "unknown";
+
+export type IssueSeverity = "critical" | "high" | "medium" | "low";
+
+export interface Issue {
+  rank: number;
+  function: string;
+  category: IssueCategory;
+  severity: IssueSeverity;
+  self_pct: number;
+  total_pct: number;
+  samples: number;
+  example_stack: string;
+}
+
+/** End-of-run summary the backend builds from `analyze_samples` + one LLM
+ *  synthesis turn for `architecture_advice`. */
+export interface VisibilityMap {
+  critical: Issue[];
+  warnings: Issue[];
+  estimatedCpuReductionPct: number;
+  architectureAdvice: string[];
+}
+
+export interface RunReport {
+  runId: string;
+  map: VisibilityMap;
+}
+
+export async function onTelemetrySample(
+  cb: (sample: TelemetrySample) => void,
+): Promise<() => void> {
+  return listen<TelemetrySample>("agent:telemetry", cb);
+}
+
+export async function onRunReport(cb: (report: RunReport) => void): Promise<() => void> {
+  return listen<RunReport>("run://report", cb);
+}
+
+/** One formatted line out of the Rust `tracing` pipeline. Mirrors what's
+ *  printed to stderr — the in-app log pane renders this so you don't need a
+ *  terminal to see what the backend is up to. */
+export interface LogLine {
+  tsMs: number;
+  level: string;
+  target: string;
+  message: string;
+}
+
+export async function onLogLine(cb: (line: LogLine) => void): Promise<() => void> {
+  return listen<LogLine>("agent:log", cb);
+}
+
+// ---------- Blocked-on-user question ----------
+
+/** The agent called `ask_user` and is parked waiting for a human answer.
+ *  The UI shows a BlockedModal with `question`; the user's reply flows back
+ *  through {@link answerBlockedQuestion}. */
+export interface BlockedQuestion {
+  id: string;
+  question: string;
+}
+
+export async function onBlockedQuestion(
+  cb: (q: BlockedQuestion) => void,
+): Promise<() => void> {
+  return listen<BlockedQuestion>("agent:blocked", cb);
+}
+
+/** Deliver the operator's answer to the in-flight blocked question. The
+ *  agent loop resumes with `answer` as the tool's content. Throws if no
+ *  question is pending. */
+export async function answerBlockedQuestion(answer: string): Promise<void> {
+  return invoke<void>("answer_blocked_question", { answer });
+}
+
 /**
  * Streaming `AgentEvent` mirror — the Rust workflow forwards every event the
  * iterative loop produced (text deltas, tool dispatch / completion, usage,

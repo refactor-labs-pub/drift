@@ -1239,3 +1239,585 @@ button { font-family: inherit; }
 .log-approval .log-icon { color: #a85b00; }
 .log-error   { background: rgba(200, 38, 38, 0.08); color: #a51e1e; }
 .log-done    { color: #00794d; font-weight: 600; }
+
+/* ---------- Split-view running screen ----------------------------------- */
+/* Replaces the single-column .loading-wrap when a scan is live: left pane
+ * is "what the agent is thinking + doing", right pane is "what the
+ * container is actually doing". Stacks on narrow windows so the panes
+ * don't overlap the orbs at smaller widths. */
+.running-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 20px;
+  width: 100%;
+  max-width: 1180px;
+  z-index: 1;
+  align-items: start;
+}
+.running-split-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.running-split-col-left {
+  align-items: center;
+}
+.running-split-col-left .reasoning-log {
+  margin-top: 0;
+}
+.running-split-col-left .reasoning-log-body {
+  max-height: 380px;
+}
+@media (max-width: 920px) {
+  .running-split { grid-template-columns: 1fr; }
+}
+
+/* ---------- TelemetryPane ----------------------------------------------- */
+.telemetry-pane {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+}
+.telemetry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.telemetry-title {
+  color: var(--text);
+  font-weight: 600;
+}
+.telemetry-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-count code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.telemetry-empty {
+  padding: 28px 16px;
+  color: var(--text-faint);
+  font-style: italic;
+  text-align: center;
+  font-size: 13px;
+}
+.telemetry-stats {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.telemetry-stat {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.telemetry-stat-critical { border-color: rgba(200, 38, 38, 0.35); background: rgba(200, 38, 38, 0.05); }
+.telemetry-stat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.telemetry-stat-label {
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.telemetry-stat-value {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-stat-critical .telemetry-stat-value { color: #c82626; }
+.telemetry-stat-sub {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-sparkline {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin-top: 4px;
+}
+.telemetry-sparkline .spark-line {
+  fill: none;
+  stroke: #ff6b3d;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.telemetry-sparkline .spark-baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.telemetry-sparkline.spark-critical .spark-line { stroke: #c82626; }
+
+/* ---------- VisibilityMapPanel (Report page top) ------------------------ */
+.vis-map {
+  width: 100%;
+  margin: 12px 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.vis-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  background: var(--gradient-soft);
+  border: 1px solid rgba(255, 107, 61, 0.25);
+  border-radius: 18px;
+  flex-wrap: wrap;
+}
+.vis-headline-figure {
+  font-size: 30px;
+  font-weight: 700;
+  color: #c84a13;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.vis-headline-figure-sub {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.vis-headline-counts {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.vis-count {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.vis-count strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+.vis-count-critical strong { color: #c82626; }
+.vis-count-warning  strong { color: #c84a13; }
+
+.vis-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vis-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0;
+}
+.vis-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vis-issues-dense .vis-issue { padding: 8px 14px; }
+
+.vis-issue {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.vis-issue-critical { border-color: rgba(200, 38, 38, 0.35); background: rgba(200, 38, 38, 0.04); }
+.vis-issue-high     { border-color: rgba(255, 153, 0, 0.32); background: rgba(255, 153, 0, 0.04); }
+.vis-issue-medium   { border-color: rgba(255, 199, 64, 0.32); }
+.vis-issue-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.vis-issue-category {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.vis-issue-function {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+  flex: 1;
+}
+.vis-issue-pct {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text);
+}
+.vis-issue-critical .vis-issue-pct { color: #c82626; }
+.vis-issue-bar {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.vis-issue-bar-fill {
+  height: 100%;
+  background: var(--gradient);
+  border-radius: 999px;
+}
+.vis-issue-critical .vis-issue-bar-fill { background: linear-gradient(90deg, #c82626, #ff6b3d); }
+.vis-issue-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.vis-issue-toggle:hover { color: var(--text-dim); }
+.vis-issue-stack {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.vis-advice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vis-advice-item {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  position: relative;
+  padding-left: 36px;
+}
+.vis-advice-item::before {
+  content: "✦";
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  color: #c84a13;
+  font-size: 14px;
+}
+
+/* ---------- Right-pane tab toggle (Telemetry / Logs) -------------------- */
+.right-pane {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.right-pane-tabs {
+  display: inline-flex;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px;
+  align-self: flex-start;
+}
+.right-pane-tab {
+  background: transparent;
+  border: none;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.right-pane-tab:hover { color: var(--text); }
+.right-pane-tab.is-active {
+  background: white;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.right-pane-body { min-height: 0; }
+
+/* ---------- BackendLogPane --------------------------------------------- */
+.backend-log {
+  width: 100%;
+  max-height: 460px;
+  overflow-y: auto;
+  background: rgba(20, 20, 24, 0.92);
+  color: #e8e6df;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.backend-log-empty {
+  padding: 28px 12px;
+  color: rgba(232, 230, 223, 0.5);
+  text-align: center;
+  font-style: italic;
+  font-family: inherit;
+}
+.bl-row {
+  display: grid;
+  grid-template-columns: 84px 52px 130px 1fr;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bl-row:hover { background: rgba(255, 255, 255, 0.04); }
+.bl-ts {
+  color: rgba(232, 230, 223, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+.bl-level {
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+.bl-level-trace { color: #8a8a8a; }
+.bl-level-debug { color: #7aa2f7; }
+.bl-level-info  { color: #9ece6a; }
+.bl-level-warn  { color: #e0af68; }
+.bl-level-error { color: #f7768e; }
+.bl-target {
+  color: rgba(232, 230, 223, 0.55);
+}
+.bl-msg {
+  color: #e8e6df;
+}
+@media (max-width: 720px) {
+  .bl-row { grid-template-columns: 1fr; }
+  .bl-level { text-align: left; }
+}
+
+/* ---------- CollapsingTimeline (Home running view) --------------------- */
+/* Past stages collapse to a one-line tick row; the active stage expands
+ * to a card that surfaces the model's current sentence. Pending stages
+ * stay hidden — the goal is "what I'm doing now", not "the whole plan". */
+.ctl {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 auto;
+}
+.ctl-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  transition: opacity 0.25s ease, color 0.25s ease;
+}
+.ctl-row-done { color: var(--text-dim); }
+.ctl-row-done .ctl-row-icon {
+  color: #00a86b;
+  background: rgba(0, 168, 107, 0.12);
+}
+.ctl-row-error { color: #c82626; }
+.ctl-row-error .ctl-row-icon {
+  color: #c82626;
+  background: rgba(200, 38, 38, 0.1);
+}
+.ctl-row-upcoming { color: var(--text-faint); font-style: italic; }
+.ctl-row-upcoming .ctl-row-icon { color: var(--text-faint); }
+.ctl-row-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 14px;
+}
+.ctl-row-icon svg { width: 14px; height: 14px; }
+.ctl-row-title {
+  font-weight: 500;
+}
+.ctl-row-time {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+}
+.ctl-row-last {
+  /* Visual hint that the next row is the active one — slightly stronger
+   * presence so the gaze flows naturally into the active card. */
+  color: var(--text);
+}
+
+.ctl-active {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 107, 61, 0.32);
+  border-radius: 16px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 14px rgba(255, 107, 61, 0.08);
+}
+.ctl-active-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.ctl-active-counter {
+  color: #c84a13;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ctl-counter-of {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+.ctl-active-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+}
+.ctl-active-detail {
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* ---------- BlockedModal ----------------------------------------------- */
+.blocked-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 12, 0.42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 20px;
+  animation: blocked-fade 0.18s ease-out;
+}
+@keyframes blocked-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.blocked-modal {
+  background: white;
+  border-radius: 18px;
+  padding: 22px 24px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.blocked-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.blocked-modal-flag {
+  color: #c84a13;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+.blocked-modal-hint {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.blocked-modal-question {
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.blocked-modal-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+.blocked-modal-input:focus { border-color: var(--border-strong); }
+.blocked-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.blocked-modal-error {
+  color: #c82626;
+  font-size: 12.5px;
+}

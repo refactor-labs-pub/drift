@@ -1,4 +1,4 @@
-//! Agent-driven scan workflow — bridges `AgentEvent`s into the 5-step
+//! Agent-driven scan workflow — bridges `AgentEvent`s into the 6-step
 //! timeline the UI renders.
 //!
 //! The deterministic [`crate::workflow`] runs hardcoded sleeps. This module
@@ -6,13 +6,26 @@
 //! model's prose as the step `detail` so the UI shows *why* the agent did
 //! what it did.
 //!
-//! Mapping (matches `desktop-ui/src/store/runStore.ts`):
+//! UI stages (must match `desktop-ui/src/store/runStore.ts` `DEFAULT_STEPS`):
 //!
-//!   index 0  →  find_image                       — "Locating Docker image"
-//!   index 1  →  detect_runtime                   — "Detecting language & runtime"
-//!   index 2  →  install_profiler                 — "Installing profiler"
-//!   index 3  →  drive_load + run_profiling       — "Running profiling session"
-//!   index 4  →  analyze_samples                  — "Analyzing bottlenecks"
+//!   index 0 → Understanding code
+//!             — list_directory / read_file_excerpt / discover_project
+//!   index 1 → Locating how to run
+//!             — check_docker / find_image / (any CI-config read counts here too)
+//!   index 2 → Setting up runtime
+//!             — ensure_image / detect_runtime / (run_on_host fallback when wired)
+//!   index 3 → Running + profiling
+//!             — find_test_runner_for_profiling / install_profiler / drive_load /
+//!               run_profiling
+//!   index 4 → Building thesis
+//!             — analyze_samples + the LLM synthesis turn
+//!   index 5 → Reporting
+//!             — final RunReport / RunComplete emission
+//!
+//! The agent's internal *recipe* (in `build_goal_prompt`) is 10 steps long
+//! and finer-grained than this — the UI just bundles related sub-steps so
+//! the operator gets a "what's happening now" overview without a wall of
+//! ticks. Mid-stage prose flows through the ReasoningLog stream on the left.
 //!
 //! The mapping is *advisory* — the loop accepts the model calling tools out
 //! of order, it just emits step events under whichever index the most-recent
@@ -23,11 +36,30 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::StreamExt;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::agent_loop::{Agent, AgentEvent};
 use super::provider::Provider;
-use crate::events::{RunComplete, RunError, StepStatus, StepUpdate};
+use super::types::Message;
+
+/// Static playbooks the agent reads on every run. Edit the MD files under
+/// `drift-lab/agent-skills/` — `include_str!` bakes them into the binary so
+/// they ship with the app, no runtime read needed.
+///
+/// **Order matters**. Project-orientation comes first: until the agent knows
+/// where the canonical Dockerfile lives (often *not* at the root in
+/// monorepos), `find_image` will return "not found" and the language-detection
+/// playbook can't help.
+const PROJECT_ORIENTATION_SKILL: &str =
+    include_str!("../../../agent-skills/project-orientation.md");
+const LANGUAGE_DETECTION_SKILL: &str =
+    include_str!("../../../agent-skills/language-detection.md");
+use crate::events::{
+    RunComplete, RunError, RunReport, StepStatus, StepUpdate, TelemetrySample, VisibilityMap,
+};
+use crate::telemetry;
+use crate::tools::analyze_samples::{Issue, Severity};
 
 /// Goal prompt fed to the agent when a scan starts. Always anchors on the
 /// literal `project_path` the user picked and lists the **expected tool order**
@@ -45,43 +77,85 @@ pub fn build_goal_prompt(project_path: &str, focus: Option<&str>) -> String {
         None => String::new(),
     };
     format!(
-        "You are Drift Lab's profiling agent. Goal: profile the service at \
-         `{project_path}` and report performance issues.\n\n\
+        "You are Drift Lab's profiling agent. Goal: understand the service at \
+         `{project_path}` deeply enough to tell the operator exactly which \
+         code paths are costing them money in the cloud — runtime, memory, \
+         IO, DB.\n\n\
          {focus_line}\
-         Recommended tool order (deviate only if a step fails):\n\
-         1. `check_docker` to confirm Docker is installed and the daemon is \
-         reachable. If status is `not_installed` or `daemon_unreachable`, STOP \
-         and report the returned `hint` to the user verbatim as the final \
-         answer — do not call further tools.\n\
-         2. `discover_project` to read manifests and identify language/runtime/scripts \
-         (path: \"{project_path}\"). You may also call `list_directory` or \
-         `read_file_excerpt` to inspect specific files.\n\
-         3. `find_image` to locate the Docker image (path: \"{project_path}\").\n\
-         4. `ensure_image` to verify the image is on the daemon. Pass through \
-         `image`, `build_context`, `manifest_path`, and `compose_service` \
-         exactly as `find_image` returned them, plus `project_path` (use the \
-         absolute `{project_path}`) for the build working directory. \
-         `ensure_image` first checks if the requested ref exists, then scans \
-         `docker images` for any locally-built image matching the project \
-         (catches the common case where the user already ran `make \
-         docker-build` and tagged the image differently), and only builds / \
-         pulls when nothing's found. **Use the `resolved_image` field from \
-         this tool's output as the input to `detect_runtime` — not the \
-         original `image_ref`.** If `status` is `failed`, report `error` and \
-         stop.\n\
-         5. `detect_runtime` for runtime + recommended profiler. Pass \
-         `resolved_image` from `ensure_image`.\n\
-         6. `find_test_runner_for_profiling` to pick the test command that will exercise \
-         the code (path: \"{project_path}\").\n\
-         7. `install_profiler`, then `run_profiling` (use `drive_load` only if profiling \
-         a running server instead of a test).\n\
-         8. `analyze_samples` to rank hotspots and produce the final report.\n\n\
-         Before each tool call, write ONE short sentence explaining what you \
-         expect to find. If a tool fails (missing Dockerfile, no test runner, \
-         etc.) explain the failure in prose and try the next best path — do \
-         NOT silently give up with zero tool calls. After the last tool \
-         returns, give the user a 2-3 sentence summary of the top findings — \
-         no further tool calls."
+         This is **not a demo**. Use the LLM (you) to actually understand \
+         the project — read the code, follow the imports, reason about the \
+         framework. Don't shotgun through tools. If at any stage you can't \
+         make progress, call `ask_user` with a concrete question and wait \
+         for the answer rather than guessing.\n\n\
+         ## The 10-step recipe\n\n\
+         1. **Understand the code.** `list_directory` at \"{project_path}\" \
+         once, then `read_file_excerpt` on the manifest (`package.json` / \
+         `Cargo.toml` / `pyproject.toml` / `go.mod` / `pom.xml`). Run \
+         `discover_project` (path: \"{project_path}\") to confirm language \
+         + scripts. Skim a couple of entrypoint files so you know what the \
+         service actually does. The orientation + language playbooks in \
+         the system prompt are mandatory reading.\n\
+         2. **Check existing profiling setup.** Look for already-wired \
+         observability: `pyroscope`, `parca`, `prometheus`, `grafana`, \
+         `sentry`, `datadog`, `newrelic`, or a `profiling/` / `metrics/` \
+         directory. If something is already there, plan to read its output \
+         instead of installing our own. Otherwise we'll inject a profiler \
+         in step 6.\n\
+         3. **Find how to run it.** `check_docker` first (if Docker isn't \
+         reachable, stop and report the `hint` verbatim). Then check CI \
+         configs (`.github/workflows/*.yml`, `Makefile`, etc.) for the \
+         canonical Docker build command — `docker build -f <path>` tells \
+         you which Dockerfile is the production one. Call `find_image` \
+         with the directory that contains that Dockerfile.\n\
+         4. **No Dockerfile? Run locally instead.** If no Dockerfile \
+         exists anywhere in the project (CI doesn't reference one, none \
+         in any subdir), `ask_user` for the exact command to start the \
+         service (\"how do you usually run this?\") and skip ahead to \
+         step 6. Don't fabricate a Dockerfile.\n\
+         5. **Build the Docker image.** `ensure_image` with the fields \
+         from `find_image` plus `project_path: \"{project_path}\"`. Use \
+         the `resolved_image` from the result going forward (not the \
+         original `image_ref`).\n\
+         6. **Run + watch telemetry.** `detect_runtime` on the resolved \
+         image, `find_test_runner_for_profiling` to pick what to exercise, \
+         `install_profiler` to inject py-spy / async-profiler / perf. The \
+         telemetry sidecar (CPU, memory, IO) starts streaming \
+         automatically as soon as a tool returns a `container_id`.\n\
+         7. **Capture + parse the profile.** `drive_load` if profiling a \
+         running server, or `run_profiling` if exercising a test. Then \
+         `analyze_samples` on the resulting sample file to get ranked \
+         hotspots with categories (db / network / cpu / lock / gc / \
+         serde / filesystem).\n\
+         8. **Build a thesis.** With the ranked issues + the live \
+         telemetry shape in hand, explain in plain prose what's clogging \
+         the runtime: \"this service is DB-bound — 35% in `psycopg.execute` \
+         under `/checkout` — but the GC pressure is also non-trivial at \
+         12%\". Don't just list — reason.\n\
+         9. **Suggest hotspots → money.** For each critical / high issue, \
+         tie it to actual cloud cost: \"this 30% CPU on JSON serialisation \
+         means a 30% over-provisioning on the worker tier\". The user \
+         cares about $$, not %%. The synthesis turn at the end of the \
+         run takes care of the JSON-formatted advice; your job in this \
+         step is to phrase the per-issue takeaway.\n\
+         10. **Summarise.** Two or three sentences for the operator: what \
+         the service is, what's worst, what's worth fixing first. No \
+         further tool calls after this.\n\n\
+         ## Stuck? Use `ask_user`\n\n\
+         If a stage doesn't progress — multiple Dockerfiles and CI \
+         doesn't pick one, the test runner crashes for an unobvious \
+         reason, the image won't build, the profiler can't attach — \
+         call `ask_user` with a specific question. Don't guess and don't \
+         silently bail. Example questions:\n\
+         - \"I found `Dockerfile.dev` and `Dockerfile.prod` — which one \
+         should I profile?\"\n\
+         - \"The test suite has 200 tests; which one represents your \
+         hottest production path?\"\n\
+         - \"py-spy needs `sys_ptrace` — can I run the container with \
+         `--cap-add SYS_PTRACE`?\"\n\n\
+         Before each tool call, write ONE short sentence explaining what \
+         you expect to find. If a tool errors, explain the failure in \
+         prose and try the next best path. Always finish with the step-10 \
+         summary — no further tool calls after."
     )
 }
 
@@ -114,30 +188,35 @@ pub const PROMPT_PRESETS: &[(&str, &str)] = &[
 ];
 
 /// Translate a tool name into the timeline index it should appear under.
-/// Returns `None` for tools that don't map to a step (the UI ignores them
-/// but they still run — `list_directory` / `read_file_excerpt` are agent
-/// reasoning aids, not user-facing milestones).
+/// Returns `None` for tools that shouldn't advance the timeline (notably
+/// `ask_user`, which is a meta-tool: it pauses the workflow waiting for a
+/// human answer, but the current stage shouldn't tick over while we wait).
 pub fn tool_to_step_index(name: &str) -> Option<usize> {
     match name {
-        // Stage 0 covers both the Docker availability probe and the image
-        // lookup — from the timeline's perspective they're "Locating Docker
-        // image", and we want a `check_docker` failure to surface there
-        // (before the user wonders why detect_runtime is stuck).
-        "check_docker" | "find_image" => Some(0),
-        // Discovery family rolls up under "Detecting language & runtime".
-        // From the user's perspective it's all one stage; the agent may
-        // call several of these tools while it figures things out.
-        // `ensure_image` belongs here because the runtime can't be detected
-        // until the image is present on the daemon.
-        "discover_project"
-        | "ensure_image"
-        | "detect_runtime"
-        | "find_test_runner_for_profiling" => Some(1),
-        "install_profiler" => Some(2),
-        "drive_load" | "run_profiling" => Some(3),
+        // Stage 0 — Understanding code. The agent skims the project layout,
+        // CI configs, and manifests via these read-only tools.
+        "list_directory" | "read_file_excerpt" | "discover_project" => Some(0),
+        // Stage 1 — Locating how to run. Docker availability + image
+        // discovery. `check_docker` lives here so a "not installed" status
+        // surfaces under a meaningful banner rather than under stage 0.
+        "check_docker" | "find_image" => Some(1),
+        // Stage 2 — Setting up runtime. The image is present and we know
+        // what's inside it.
+        "ensure_image" | "detect_runtime" => Some(2),
+        // Stage 3 — Running + profiling. Picking the right test or load,
+        // injecting the profiler, capturing samples.
+        "find_test_runner_for_profiling"
+        | "install_profiler"
+        | "drive_load"
+        | "run_profiling" => Some(3),
+        // Stage 4 — Building thesis. `analyze_samples` parses the raw
+        // profile; the workflow's post-loop synthesis turn then extends
+        // this stage with the LLM's architecture summary.
         "analyze_samples" => Some(4),
-        // Pure reasoning aids — don't surface to the timeline.
-        "list_directory" | "read_file_excerpt" => None,
+        // `ask_user` is a meta-tool — it parks the agent on a question.
+        // We don't want to tick the timeline forward while we wait; the
+        // BlockedModal is the user-visible signal instead.
+        "ask_user" => None,
         _ => None,
     }
 }
@@ -154,6 +233,15 @@ pub trait WorkflowSink: Send + Sync {
     /// alongside the coarse step timeline. Default is a no-op so existing
     /// sinks (and tests that don't care) keep compiling.
     fn emit_agent_event(&self, _event: &AgentEvent) {}
+
+    /// Forward one container-telemetry snapshot. Emitted at ~2 Hz once a tool
+    /// produced a `container_id`; ignored before then.
+    fn emit_telemetry(&self, _sample: TelemetrySample) {}
+
+    /// Final structured "visibility map" — issues bucketed by severity plus
+    /// the LLM's architecture advice. Emitted just before [`Self::emit_complete`]
+    /// when the run produced an `analyze_samples` result.
+    fn emit_report(&self, _report: RunReport) {}
 }
 
 /// In-process sink that accumulates events into a `Vec`. Used by tests and
@@ -171,6 +259,8 @@ pub enum CapturedEvent {
     /// Raw agent event — surfaced so tests can assert against the streaming
     /// reasoning, not just the coarse step events.
     Agent(AgentEvent),
+    Telemetry(TelemetrySample),
+    Report(RunReport),
 }
 
 impl WorkflowSink for CaptureSink {
@@ -185,6 +275,12 @@ impl WorkflowSink for CaptureSink {
     }
     fn emit_agent_event(&self, event: &AgentEvent) {
         self.events.lock().unwrap().push(CapturedEvent::Agent(event.clone()));
+    }
+    fn emit_telemetry(&self, sample: TelemetrySample) {
+        self.events.lock().unwrap().push(CapturedEvent::Telemetry(sample));
+    }
+    fn emit_report(&self, report: RunReport) {
+        self.events.lock().unwrap().push(CapturedEvent::Report(report));
     }
 }
 
@@ -207,6 +303,15 @@ pub struct RunRequest {
 /// Drive the agent through a profiling scan, mapping `AgentEvent`s to
 /// `StepUpdate`s on `sink`. Returns when the agent emits `Done`,
 /// `TurnBudgetExceeded`, `Error`, or the cancel token fires.
+///
+/// Two side-channels feed the UI alongside the step timeline:
+///   * **telemetry** — once a tool reports a `container_id`, a sampler task
+///     (see [`crate::telemetry`]) pushes ~2 Hz snapshots through an mpsc;
+///     this loop forwards each onto [`WorkflowSink::emit_telemetry`].
+///   * **visibility map** — when the run completes cleanly *and*
+///     `analyze_samples` produced issues, a final non-streaming LLM turn
+///     synthesises 3-5 architecture-advice bullets; the result is emitted
+///     via [`WorkflowSink::emit_report`] just before `RunComplete`.
 pub async fn run<S: WorkflowSink>(
     req: RunRequest,
     sink: &S,
@@ -232,54 +337,348 @@ pub async fn run<S: WorkflowSink>(
     // repeat the project_path in the system message because some smaller
     // models drop user-message arguments when invoking tools; having the path
     // in the system prompt makes "default to scanning <path>" the safe choice.
+    //
+    // The orientation + language skills are appended verbatim. They're
+    // deliberately long: smaller / non-tool-tuned models otherwise burn 5+
+    // calls before they find a Dockerfile in a non-trivial layout, or pick
+    // the wrong one (Dockerfile.dev vs the canonical CI build). Loading them
+    // once per session is cheap and dramatically tightens early-stage tool
+    // use.
     let system = format!(
         "You are an embedded profiling agent operating on the project at \
          `{}`. Use only the provided tools. Call at least `discover_project` \
          or `find_image` before answering — never reply with a final summary \
          without having investigated. Keep prose short. Always finish with \
-         a final summary.",
-        req.project_path
+         a final summary.\n\n\
+         ---\n\n{}\n\n---\n\n{}",
+        req.project_path,
+        PROJECT_ORIENTATION_SKILL,
+        LANGUAGE_DETECTION_SKILL
     );
+
+    // Clone the provider so the synthesis turn after the stream loop has a
+    // handle. `Agent::new` moves the Arc, so we save one for ourselves.
+    let synth_provider = req.provider.clone();
     let agent = Agent::new(req.provider, system).with_mode(req.mode);
 
     let mut tracker = StepTracker::new(req.run_id.clone());
     let mut stream = Box::pin(agent.reply(goal, vec![], cancel.clone()));
 
-    while let Some(item) = stream.next().await {
-        if cancel.is_cancelled() {
-            tracing::info!(target: "drift::workflow", run_id = %req.run_id, "cancelled by user");
-            break;
-        }
-        let event = match item {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!(
-                    target: "drift::workflow",
-                    run_id = %req.run_id,
-                    error = %e,
-                    "provider/transport error — surfacing to UI and exiting"
-                );
-                let err = RunError {
-                    run_id: req.run_id.clone(),
-                    message: e.to_string(),
-                };
-                sink.emit_error(err);
-                return Err(e.to_string());
+    // Telemetry channel. The sampler task pushes snapshots; the select loop
+    // below forwards them. We hand out one cancel token to the sampler so
+    // dropping the workflow drops the docker-stats poller too.
+    let (telem_tx, mut telem_rx) = mpsc::unbounded_channel::<TelemetrySample>();
+    let telem_cancel = CancellationToken::new();
+    let mut sampler_container: Option<String> = None;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                tracing::info!(target: "drift::workflow", run_id = %req.run_id, "cancelled by user");
+                break;
             }
-        };
-        // Mirror raw event to the sink BEFORE absorbing into step state — the
-        // UI's reasoning log wants to see deltas in real time, not after we
-        // collapse them into step updates.
-        sink.emit_agent_event(&event);
-        log_agent_event(&req.run_id, &event);
-        tracker.absorb(event, sink);
-        if tracker.terminal {
-            tracing::info!(target: "drift::workflow", run_id = %req.run_id, "scan workflow completed");
-            break;
+            Some(sample) = telem_rx.recv() => {
+                sink.emit_telemetry(sample);
+            }
+            item = stream.next() => {
+                let Some(item) = item else { break };
+                let event = match item {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::error!(
+                            target: "drift::workflow",
+                            run_id = %req.run_id,
+                            error = %e,
+                            "provider/transport error — surfacing to UI and exiting"
+                        );
+                        sink.emit_error(RunError {
+                            run_id: req.run_id.clone(),
+                            message: e.to_string(),
+                        });
+                        telem_cancel.cancel();
+                        return Err(e.to_string());
+                    }
+                };
+                // Mirror raw event to the sink BEFORE absorbing — the UI's
+                // reasoning log wants to see deltas in real time, not after
+                // we collapse them into step updates.
+                sink.emit_agent_event(&event);
+                log_agent_event(&req.run_id, &event);
+
+                // Lazily start the telemetry sampler the first time any tool
+                // returns a container_id. Tools that exec inside the target
+                // container (install_profiler, drive_load, run_profiling,
+                // exec_in_container) all surface one.
+                if sampler_container.is_none() {
+                    if let AgentEvent::ToolCompleted { content, is_error: false, .. } = &event {
+                        if let Some(cid) = extract_container_id(content) {
+                            tracing::info!(
+                                target: "drift::workflow",
+                                run_id = %req.run_id,
+                                container_id = %cid,
+                                "spawning telemetry sampler"
+                            );
+                            telemetry::spawn_sampler(
+                                req.run_id.clone(),
+                                cid.clone(),
+                                telem_tx.clone(),
+                                telem_cancel.clone(),
+                            );
+                            sampler_container = Some(cid);
+                        }
+                    }
+                }
+
+                tracker.absorb(event, sink);
+                if tracker.terminal {
+                    tracing::info!(target: "drift::workflow", run_id = %req.run_id, "scan workflow completed");
+                    break;
+                }
+            }
         }
     }
 
+    // Shut the sampler down and drain any straggler samples. Dropping our
+    // copy of the sender lets the receiver close once the sampler exits.
+    telem_cancel.cancel();
+    drop(telem_tx);
+    while let Ok(sample) = telem_rx.try_recv() {
+        sink.emit_telemetry(sample);
+    }
+
+    // Synthesise the visibility map + emit the final RunComplete. Only on a
+    // clean Done — Error / Approval / TurnBudgetExceeded paths already
+    // emitted a RunError from inside `absorb`, so we exit silently here.
+    if tracker.completed_successfully {
+        let issues = std::mem::take(&mut tracker.last_analysis_issues);
+        let issues_found = issues.len() as u32;
+        let critical_count = issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Critical))
+            .count() as u32;
+
+        if !issues.is_empty() {
+            // Stage 4 — Building thesis. The agent's analyze_samples
+            // already advanced us here; mark Active explicitly so the UI
+            // shows progress while the LLM synthesis call runs.
+            sink.emit_step(StepUpdate {
+                run_id: req.run_id.clone(),
+                index: 4,
+                status: StepStatus::Active,
+                detail: Some("Asking the model to summarise the architecture impact…".into()),
+                duration_ms: None,
+            });
+            let thesis_start = Instant::now();
+            let map =
+                build_visibility_map(&issues, synth_provider.clone(), &cancel).await;
+            sink.emit_step(StepUpdate {
+                run_id: req.run_id.clone(),
+                index: 4,
+                status: StepStatus::Done,
+                detail: Some(format!(
+                    "{} critical · {} warnings · ~{:.0}% CPU reduction available",
+                    map.critical.len(),
+                    map.warnings.len(),
+                    map.estimated_cpu_reduction_pct
+                )),
+                duration_ms: Some(thesis_start.elapsed().as_millis() as u64),
+            });
+
+            // Stage 5 — Reporting. Atomic from the user's perspective —
+            // a single emit_report flush + RunComplete.
+            sink.emit_step(StepUpdate {
+                run_id: req.run_id.clone(),
+                index: 5,
+                status: StepStatus::Active,
+                detail: Some("Packaging the visibility map…".into()),
+                duration_ms: None,
+            });
+            sink.emit_report(RunReport {
+                run_id: req.run_id.clone(),
+                map,
+            });
+            sink.emit_step(StepUpdate {
+                run_id: req.run_id.clone(),
+                index: 5,
+                status: StepStatus::Done,
+                detail: Some("Report ready.".into()),
+                duration_ms: None,
+            });
+        }
+
+        sink.emit_complete(RunComplete {
+            run_id: req.run_id.clone(),
+            issues_found,
+            critical_count,
+        });
+    }
+
     Ok(())
+}
+
+/// Best-effort: pull a `container_id` field out of a tool's JSON output.
+/// Tools that touch the target container (install_profiler, drive_load,
+/// run_profiling, exec_in_container) all surface it on the top level.
+fn extract_container_id(content: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    v.get("container_id")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Bucket issues into critical / warnings, compute the heuristic CPU-reduction
+/// estimate, and call the LLM once for a 3-5 bullet architecture summary.
+/// Falls back to a deterministic per-category recap if the synthesis fails
+/// — the report is the user-facing deliverable, so we never leave it empty.
+async fn build_visibility_map(
+    issues: &[Issue],
+    provider: Arc<dyn Provider>,
+    cancel: &CancellationToken,
+) -> VisibilityMap {
+    let critical: Vec<Issue> = issues
+        .iter()
+        .filter(|i| matches!(i.severity, Severity::Critical))
+        .take(3)
+        .cloned()
+        .collect();
+    let warnings: Vec<Issue> = issues
+        .iter()
+        .filter(|i| matches!(i.severity, Severity::High | Severity::Medium))
+        .take(10)
+        .cloned()
+        .collect();
+
+    let estimated_cpu_reduction_pct = critical
+        .iter()
+        .map(|i| i.self_pct as f32)
+        .sum::<f32>()
+        .min(50.0);
+
+    let architecture_advice = match synthesise_advice(provider, issues, cancel).await {
+        Ok(bullets) if !bullets.is_empty() => bullets,
+        Ok(_) | Err(_) => fallback_advice(issues),
+    };
+
+    VisibilityMap {
+        critical,
+        warnings,
+        estimated_cpu_reduction_pct,
+        architecture_advice,
+    }
+}
+
+/// Run one non-streaming LLM turn, no tools available, asking for a JSON blob
+/// of architectural recommendations.
+async fn synthesise_advice(
+    provider: Arc<dyn Provider>,
+    issues: &[Issue],
+    cancel: &CancellationToken,
+) -> Result<Vec<String>, String> {
+    let bullets = issues
+        .iter()
+        .take(15)
+        .map(|i| {
+            format!(
+                "- `{}` (category {:?}, severity {:?}, self {:.1}%, total {:.1}%)",
+                i.function, i.category, i.severity, i.self_pct, i.total_pct
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let system =
+        "You are a senior performance engineer. Given a list of profiled hotspots, write \
+         3-5 short architectural recommendations. Each bullet must reference a specific \
+         function and the % of total CPU it accounts for. Output JSON only, no prose \
+         around it: `{ \"advice\": [\"...\", \"...\"] }`.";
+    let user = Message::user(format!(
+        "Profiling hotspots from a recent run:\n\n{bullets}\n\n\
+         Return the 3-5 most impactful architectural changes."
+    ));
+
+    let stream = provider
+        .stream(system, std::slice::from_ref(&user), &[])
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut stream = Box::pin(stream);
+    let mut buf = String::new();
+    while let Some(item) = stream.next().await {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        match item {
+            Ok((Some(msg), _)) => buf.push_str(&msg.flat_text()),
+            Ok((None, _)) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+
+    if let Some(items) = parse_advice_json(&buf) {
+        return Ok(items);
+    }
+    // The model returned prose around the JSON, or no JSON at all. Try a
+    // permissive line-based split as a last resort.
+    Ok(split_bullets(&buf))
+}
+
+/// Extract `advice: string[]` from any JSON object embedded in `text`.
+fn parse_advice_json(text: &str) -> Option<Vec<String>> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let blob = &text[start..=end];
+    let v: serde_json::Value = serde_json::from_str(blob).ok()?;
+    let arr = v.get("advice")?.as_array()?;
+    let items: Vec<String> = arr
+        .iter()
+        .filter_map(|s| s.as_str().map(str::trim).map(String::from))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
+/// Permissive newline + bullet-marker split. Used when the model didn't
+/// return clean JSON.
+fn split_bullets(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.trim().trim_start_matches(['-', '*', '·', '•']).trim())
+        .filter(|t| t.len() >= 8 && !t.starts_with('{') && !t.starts_with('}'))
+        .map(String::from)
+        .take(5)
+        .collect()
+}
+
+/// Deterministic fallback when the synthesis call fails entirely. Builds one
+/// bullet per category found in the top issues, so the report still shows
+/// *something* actionable.
+fn fallback_advice(issues: &[Issue]) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut by_cat: BTreeMap<String, (f64, String)> = BTreeMap::new();
+    for i in issues.iter().take(10) {
+        let cat = format!("{:?}", i.category);
+        let entry = by_cat.entry(cat).or_insert((0.0, i.function.clone()));
+        entry.0 += i.self_pct;
+    }
+    by_cat
+        .into_iter()
+        .map(|(cat, (pct, fn_name))| {
+            format!(
+                "Address {} hotspots (e.g. `{}`) — accounts for ~{:.0}% of total CPU.",
+                cat.to_lowercase(),
+                fn_name,
+                pct
+            )
+        })
+        .take(5)
+        .collect()
 }
 
 /// Backend log line per agent event. Goes through `tracing` so it lands on
@@ -392,6 +791,10 @@ struct StepTracker {
     starts: std::collections::HashMap<usize, Instant>,
     /// Whether we've already finalised the run.
     terminal: bool,
+    /// True only when the agent emitted `Done` cleanly. Used by `run()` to
+    /// decide whether to synthesise the visibility map / emit `RunComplete`
+    /// (we don't on Error / Approval / TurnBudgetExceeded paths).
+    completed_successfully: bool,
     /// The last tool we dispatched — so when `ToolCompleted` arrives we know
     /// which step index to mark done. Tools may run sequentially or in
     /// parallel; we track the last *dispatched* call.
@@ -400,10 +803,10 @@ struct StepTracker {
     /// always return `Ok`, but the *payload* tells us whether the user can
     /// continue — we use the name to peek at the right field on completion.
     pending_tool: Option<String>,
-    /// Last successful `analyze_samples` result, parsed for `issues` /
-    /// `critical_count`. Read on `AgentEvent::Done` so the UI's DoneState
-    /// shows real numbers instead of the previous hardcoded 0/0.
-    last_analysis: Option<(usize, u64)>,
+    /// Full issue list from the last successful `analyze_samples` call. Read
+    /// by `run()` after the agent finishes, to build the visibility map and
+    /// populate `RunComplete`.
+    last_analysis_issues: Vec<Issue>,
 }
 
 impl StepTracker {
@@ -413,9 +816,10 @@ impl StepTracker {
             thinking_buffer: String::new(),
             starts: std::collections::HashMap::new(),
             terminal: false,
+            completed_successfully: false,
             pending_index: None,
             pending_tool: None,
-            last_analysis: None,
+            last_analysis_issues: Vec::new(),
         }
     }
 
@@ -490,20 +894,17 @@ impl StepTracker {
                 // check that contradicts the actual state.
                 let effective_error = is_error
                     || (tool_name == "check_docker" && !check_docker_is_ready(&content));
-                // Capture analyze_samples counts so RunComplete reports the real
-                // numbers instead of hardcoded 0/0. Only on success.
+                // Capture analyze_samples issues so `run()` can build the
+                // visibility map after the loop ends. Only on success.
                 if index == 4 && !is_error {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let issues = v
-                            .get("issues")
-                            .and_then(|a| a.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        let crit = v
-                            .get("critical_count")
-                            .and_then(|n| n.as_u64())
-                            .unwrap_or(0);
-                        self.last_analysis = Some((issues, crit));
+                        if let Some(arr) = v.get("issues") {
+                            if let Ok(parsed) =
+                                serde_json::from_value::<Vec<Issue>>(arr.clone())
+                            {
+                                self.last_analysis_issues = parsed;
+                            }
+                        }
                     }
                 }
                 // For `check_docker`, prefer the structured hint as the
@@ -574,15 +975,11 @@ impl StepTracker {
             }
 
             AgentEvent::Done => {
-                // The agent finished cleanly. If analyze_samples ran, surface
-                // its counts; otherwise zeros are the honest answer.
+                // Mark the loop terminal and defer the actual RunComplete
+                // emission to `run()`, which also runs the visibility-map
+                // synthesis turn (async) before signalling completion.
                 self.terminal = true;
-                let (issues_found, critical_count) = self.last_analysis.unwrap_or((0, 0));
-                sink.emit_complete(RunComplete {
-                    run_id: self.run_id.clone(),
-                    issues_found: issues_found as u32,
-                    critical_count: critical_count as u32,
-                });
+                self.completed_successfully = true;
             }
         }
     }
@@ -617,7 +1014,8 @@ fn check_docker_summary(content: &str) -> Option<String> {
 
 /// Compress one tool's JSON output into one human line for the timeline.
 /// We do not parse the structure deeply — just look for a few hint fields
-/// that the existing `tools::*::Output` types tend to expose.
+/// that the existing `tools::*::Output` types tend to expose. The match
+/// indexes mirror the 6-stage UI timeline.
 fn summarise_tool_output(index: usize, content: &str, is_error: bool) -> String {
     if is_error {
         return content.lines().next().unwrap_or(content).to_string();
@@ -627,72 +1025,116 @@ fn summarise_tool_output(index: usize, content: &str, is_error: bool) -> String 
         Err(_) => return content.chars().take(120).collect(),
     };
     match index {
-        // Stage 0 covers both `check_docker` and `find_image`. The two payloads
-        // are disjoint — `check_docker` has `status`, `find_image` has
-        // `image_ref` — so we can tell them apart and render the right line.
+        // Stage 0 — Understanding code. Covers discover_project (has
+        // `language` / `frameworks`), list_directory (`entries`), and
+        // read_file_excerpt (`bytes_read` / `lines`).
         0 => {
+            if let Some(lang) = v.get("language").and_then(|s| s.as_str()) {
+                let frameworks = v
+                    .get("frameworks")
+                    .and_then(|a| a.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str())
+                            .take(3)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .filter(|s| !s.is_empty());
+                return match frameworks {
+                    Some(f) => format!("Language: {lang} · Frameworks: {f}"),
+                    None => format!("Language: {lang}"),
+                };
+            }
+            if let Some(entries) = v.get("entries").and_then(|a| a.as_array()) {
+                let n = entries.len();
+                let truncated = v.get("truncated").and_then(|b| b.as_bool()).unwrap_or(false);
+                return if truncated {
+                    format!("Listed {n}+ entries (truncated)")
+                } else {
+                    format!("Listed {n} entries")
+                };
+            }
+            if let Some(lines) = v.get("lines").and_then(|a| a.as_array()) {
+                return format!("Read {} lines", lines.len());
+            }
+            "Inspecting project".into()
+        }
+        // Stage 1 — Locating how to run. `check_docker` reports `status`,
+        // `find_image` reports `image_ref`. Disjoint payloads.
+        1 => {
             if let Some(status) = v.get("status").and_then(|s| s.as_str()) {
                 let server = v
                     .get("server_version")
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
-                return match status {
-                    "ready" if !server.is_empty() => format!("Docker ready (daemon v{server})"),
-                    "ready" => "Docker ready".into(),
-                    "daemon_unreachable" => "Docker is installed but the daemon isn't running".into(),
-                    "not_installed" => "Docker is not installed on this machine".into(),
-                    other => format!("Docker status: {other}"),
-                };
+                if v.get("server_version").is_some() || status == "not_installed" {
+                    return match status {
+                        "ready" if !server.is_empty() => format!("Docker ready (daemon v{server})"),
+                        "ready" => "Docker ready".into(),
+                        "daemon_unreachable" => {
+                            "Docker is installed but the daemon isn't running".into()
+                        }
+                        "not_installed" => "Docker is not installed on this machine".into(),
+                        other => format!("Docker status: {other}"),
+                    };
+                }
             }
             v.get("image_ref")
                 .and_then(|s| s.as_str())
                 .map(|s| format!("Found {s}"))
                 .unwrap_or_else(|| "Image located".into())
         }
-        1 => {
-            // Stage 1 covers discover_project, ensure_image, detect_runtime,
-            // and find_test_runner_for_profiling. Detect which payload we
-            // have by sniffing for tool-specific fields.
-            if let Some(status) = v.get("status").and_then(|s| s.as_str()) {
-                // `ensure_image` shape: { status, resolved_image, strategy, ... }
-                if let Some(resolved) = v.get("resolved_image").and_then(|s| s.as_str()) {
-                    let strategy = v.get("strategy").and_then(|s| s.as_str()).unwrap_or("");
-                    return match (status, strategy) {
-                        ("already_present", _) => format!("Image already on daemon: {resolved}"),
-                        ("discovered_existing", _) => format!("Reusing existing local image: {resolved}"),
-                        ("built", "compose-build") => format!("Built via compose: {resolved}"),
-                        ("built", _) => format!("Built image: {resolved}"),
-                        ("pulled", _) => format!("Pulled image: {resolved}"),
-                        ("failed", _) => v
-                            .get("error")
-                            .and_then(|e| e.as_str())
-                            .unwrap_or("ensure_image failed")
-                            .to_string(),
-                        (other, _) => format!("ensure_image: {other}"),
-                    };
-                }
+        // Stage 2 — Setting up runtime. `ensure_image` shape has
+        // `resolved_image`; `detect_runtime` has `language` /
+        // `recommended_profiler`.
+        2 => {
+            if let Some(resolved) = v.get("resolved_image").and_then(|s| s.as_str()) {
+                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                let strategy = v.get("strategy").and_then(|s| s.as_str()).unwrap_or("");
+                return match (status, strategy) {
+                    ("already_present", _) => format!("Image already on daemon: {resolved}"),
+                    ("discovered_existing", _) => {
+                        format!("Reusing existing local image: {resolved}")
+                    }
+                    ("built", "compose-build") => format!("Built via compose: {resolved}"),
+                    ("built", _) => format!("Built image: {resolved}"),
+                    ("pulled", _) => format!("Pulled image: {resolved}"),
+                    ("failed", _) => v
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("ensure_image failed")
+                        .to_string(),
+                    (other, _) => format!("ensure_image: {other}"),
+                };
             }
-            // Otherwise fall through to detect_runtime's shape.
-            let lang = v
-                .get("language")
-                .and_then(|s| s.as_str())
-                .unwrap_or("?");
+            let lang = v.get("language").and_then(|s| s.as_str()).unwrap_or("?");
             let prof = v
                 .get("recommended_profiler")
                 .and_then(|s| s.as_str())
                 .unwrap_or("?");
             format!("Language: {lang} · Profiler: {prof}")
         }
-        2 => v
-            .get("version")
-            .and_then(|s| s.as_str())
-            .map(|s| format!("Profiler installed ({s})"))
-            .unwrap_or_else(|| "Profiler installed".into()),
-        3 => v
-            .get("samples_captured")
-            .and_then(|n| n.as_u64())
-            .map(|n| format!("{n} samples captured"))
-            .unwrap_or_else(|| "Profiling complete".into()),
+        // Stage 3 — Running + profiling. find_test_runner reports
+        // `candidates`; install_profiler reports `version`; drive_load
+        // reports `requests_sent`; run_profiling reports `samples_captured`.
+        3 => {
+            if let Some(samples) = v.get("samples_captured").and_then(|n| n.as_u64()) {
+                return format!("{samples} samples captured");
+            }
+            if let Some(reqs) = v.get("requests_sent").and_then(|n| n.as_u64()) {
+                return format!("{reqs} requests driven");
+            }
+            if let Some(version) = v.get("version").and_then(|s| s.as_str()) {
+                return format!("Profiler installed ({version})");
+            }
+            if let Some(candidates) = v.get("candidates").and_then(|a| a.as_array()) {
+                return format!("{} test candidate(s) found", candidates.len());
+            }
+            "Profiling stage complete".into()
+        }
+        // Stage 4 — Building thesis (analyze_samples). The synthesis turn
+        // overwrites this stage's detail after the post-loop emit.
         4 => {
             let issues = v.get("issues").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0);
             let crit = v.get("critical_count").and_then(|n| n.as_u64()).unwrap_or(0);
@@ -784,15 +1226,26 @@ mod tests {
 
     #[test]
     fn step_index_mapping_covers_canonical_workflow() {
-        // `check_docker` shares stage 0 with `find_image` — both fall under
-        // "Locating Docker image" on the timeline.
-        assert_eq!(tool_to_step_index("check_docker"), Some(0));
-        assert_eq!(tool_to_step_index("find_image"), Some(0));
-        assert_eq!(tool_to_step_index("detect_runtime"), Some(1));
-        assert_eq!(tool_to_step_index("install_profiler"), Some(2));
+        // Stage 0 — Understanding code (read-only exploration).
+        assert_eq!(tool_to_step_index("list_directory"), Some(0));
+        assert_eq!(tool_to_step_index("read_file_excerpt"), Some(0));
+        assert_eq!(tool_to_step_index("discover_project"), Some(0));
+        // Stage 1 — Locating how to run.
+        assert_eq!(tool_to_step_index("check_docker"), Some(1));
+        assert_eq!(tool_to_step_index("find_image"), Some(1));
+        // Stage 2 — Setting up runtime.
+        assert_eq!(tool_to_step_index("ensure_image"), Some(2));
+        assert_eq!(tool_to_step_index("detect_runtime"), Some(2));
+        // Stage 3 — Running + profiling.
+        assert_eq!(tool_to_step_index("find_test_runner_for_profiling"), Some(3));
+        assert_eq!(tool_to_step_index("install_profiler"), Some(3));
         assert_eq!(tool_to_step_index("drive_load"), Some(3));
         assert_eq!(tool_to_step_index("run_profiling"), Some(3));
+        // Stage 4 — Building thesis. analyze_samples lands here; the LLM
+        // synthesis turn extends the same stage from `run()` post-loop.
         assert_eq!(tool_to_step_index("analyze_samples"), Some(4));
+        // No-ops: meta tools / unmapped primitives.
+        assert_eq!(tool_to_step_index("ask_user"), None);
         assert_eq!(tool_to_step_index("list_containers"), None);
     }
 
@@ -834,10 +1287,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_docker_not_installed_marks_step_zero_as_error() {
+    async fn check_docker_not_installed_marks_locate_stage_as_error() {
         // The tool returned Ok with the structured "not_installed" payload —
-        // the tracker should promote it to an Error step so the timeline
-        // shows a red blocker (not a green check) with the install hint.
+        // the tracker should promote it to an Error step on stage 1 ("Locating
+        // how to run") so the timeline shows a red blocker with the install
+        // hint, not a green check that contradicts the actual state.
         let mut tracker = StepTracker::new("r".into());
         let sink = CaptureSink::default();
 
@@ -870,7 +1324,7 @@ mod tests {
             .iter()
             .find(|s| matches!(s.status, StepStatus::Error))
             .expect("expected an Error step from a not-installed check_docker");
-        assert_eq!(done.index, 0);
+        assert_eq!(done.index, 1, "check_docker should error under stage 1 (Locating how to run)");
         assert!(
             done.detail.as_deref().unwrap_or("").contains("Install Docker"),
             "step detail should carry the install hint, got: {:?}",
@@ -879,26 +1333,38 @@ mod tests {
     }
 
     #[test]
-    fn summarise_uses_image_ref_for_step_zero() {
+    fn summarise_uses_image_ref_for_locate_stage() {
+        // `find_image` now lives on stage 1 (Locating how to run).
         let payload = r#"{"image_ref": "registry/svc:42"}"#;
-        let got = summarise_tool_output(0, payload, false);
+        let got = summarise_tool_output(1, payload, false);
         assert!(got.contains("registry/svc:42"));
     }
 
     #[test]
     fn summarise_falls_back_when_payload_is_garbage() {
-        let got = summarise_tool_output(0, "this is not json", false);
+        // Any stage should degrade to "echo the raw prefix" when the JSON
+        // doesn't parse. We use stage 1 here arbitrarily.
+        let got = summarise_tool_output(1, "this is not json", false);
         assert!(got.contains("not json"));
     }
 
     #[test]
-    fn step_tracker_threads_analyze_samples_into_run_complete() {
-        // Regression: Done used to hardcode issues_found = critical_count = 0
-        // even after analyze_samples produced real numbers.
+    fn summarise_stage_zero_reports_discover_project_language() {
+        let payload = r#"{"language": "python", "frameworks": ["fastapi"]}"#;
+        let got = summarise_tool_output(0, payload, false);
+        assert!(got.to_lowercase().contains("python"), "got: {got}");
+        assert!(got.contains("fastapi"));
+    }
+
+    #[test]
+    fn step_tracker_parses_analyze_samples_issues_for_visibility_map() {
+        // The tracker captures the full Issue list from analyze_samples and
+        // hands it to `run()` to build the visibility map. Done now only
+        // marks the run as ready-to-finalise — RunComplete itself is emitted
+        // post-loop by `run()`, so we don't assert on the sink here.
         let mut tracker = StepTracker::new("r".into());
         let sink = CaptureSink::default();
 
-        // Dispatch analyze_samples (index 4), then complete it with a payload.
         tracker.absorb(
             AgentEvent::ToolDispatched {
                 id: "t1".into(),
@@ -910,24 +1376,91 @@ mod tests {
         tracker.absorb(
             AgentEvent::ToolCompleted {
                 id: "t1".into(),
-                content: r#"{"issues": [1,2,3,4,5], "critical_count": 2}"#.into(),
+                content: serde_json::json!({
+                    "issues": [
+                        {
+                            "rank": 1,
+                            "function": "psycopg.execute",
+                            "category": "database",
+                            "severity": "critical",
+                            "self_pct": 30.0,
+                            "total_pct": 60.0,
+                            "samples": 100,
+                            "example_stack": "main;handle;psycopg.execute"
+                        },
+                        {
+                            "rank": 2,
+                            "function": "json.dumps",
+                            "category": "serde",
+                            "severity": "high",
+                            "self_pct": 12.5,
+                            "total_pct": 22.0,
+                            "samples": 42,
+                            "example_stack": "main;render;json.dumps"
+                        }
+                    ],
+                    "critical_count": 1
+                })
+                .to_string(),
                 is_error: false,
             },
             &sink,
         );
         tracker.absorb(AgentEvent::Done, &sink);
 
-        let completes: Vec<_> = sink
-            .snapshot()
-            .into_iter()
-            .filter_map(|e| match e {
-                CapturedEvent::Complete(c) => Some(c),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(completes.len(), 1);
-        assert_eq!(completes[0].issues_found, 5);
-        assert_eq!(completes[0].critical_count, 2);
+        assert!(tracker.completed_successfully);
+        assert_eq!(tracker.last_analysis_issues.len(), 2);
+        assert_eq!(tracker.last_analysis_issues[0].function, "psycopg.execute");
+        assert!(matches!(
+            tracker.last_analysis_issues[0].severity,
+            Severity::Critical
+        ));
+    }
+
+    #[test]
+    fn visibility_map_buckets_issues_and_caps_cpu_reduction() {
+        // Two critical hotspots adding to 60% self-time → the heuristic
+        // should clamp the headline at 50%. A high-severity issue and a
+        // medium one belong in `warnings`.
+        let issues = vec![
+            test_issue("psycopg.execute", Severity::Critical, 35.0),
+            test_issue("redis.get", Severity::Critical, 25.0),
+            test_issue("json.dumps", Severity::High, 12.0),
+            test_issue("read_file", Severity::Medium, 4.0),
+        ];
+        let map = futures_executor_block(build_visibility_map(
+            &issues,
+            std::sync::Arc::new(ScriptedProvider::new(vec![vec![text_chunk(
+                r#"{"advice":["Refactor the DB layer to batch SELECTs"]}"#,
+            )]])),
+            &CancellationToken::new(),
+        ));
+        assert_eq!(map.critical.len(), 2);
+        assert_eq!(map.warnings.len(), 2);
+        assert!((map.estimated_cpu_reduction_pct - 50.0).abs() < 0.001);
+        assert!(!map.architecture_advice.is_empty());
+    }
+
+    fn test_issue(name: &str, severity: Severity, self_pct: f64) -> Issue {
+        use crate::tools::analyze_samples::Category;
+        Issue {
+            rank: 0,
+            function: name.into(),
+            category: Category::Database,
+            severity,
+            self_pct,
+            total_pct: self_pct * 1.5,
+            samples: 0,
+            example_stack: name.into(),
+        }
+    }
+
+    fn futures_executor_block<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
     }
 
     #[tokio::test]
@@ -975,9 +1508,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(steps.len(), 2, "expected one Active + one Done event for step 0");
+        assert_eq!(steps.len(), 2, "expected one Active + one Done event for find_image's stage");
         assert!(matches!(steps[0].status, StepStatus::Active));
-        assert_eq!(steps[0].index, 0);
+        // find_image now lives on stage 1 (Locating how to run).
+        assert_eq!(steps[0].index, 1);
         // The thinking prose flows into the active step's detail.
         assert!(
             steps[0]
@@ -995,14 +1529,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflow_walks_full_five_step_timeline() {
-        // Cover every step index to prove the orchestration is end-to-end.
-        // We use Mode::Auto so destructive tools (install_profiler etc.) run.
-        // For tools that need Docker (detect_runtime, install_profiler,
-        // drive_load, run_profiling), the in-process call will fail — and
-        // that's fine: we're verifying the *orchestration*, not the tool
-        // implementations. The step's `is_error` will be true, but it will
-        // still be marked under the right index.
+    async fn workflow_walks_locate_runtime_profiling_thesis_stages() {
+        // Cover stages 1-4 (find_image → analyze_samples) to prove the
+        // orchestration is end-to-end. We use Mode::Auto so destructive
+        // tools run. For tools that need Docker (detect_runtime,
+        // install_profiler, run_profiling), the in-process call will fail
+        // in a CI sandbox — that's fine: we're verifying the
+        // *orchestration*, not the tool implementations.
         let dir = std::env::temp_dir().join(format!("drift-wf-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1050,10 +1583,16 @@ mod tests {
             .collect();
 
         // Each step appears at least once with status Active. We don't
-        // require Done because steps 1-4 hit the real Docker tool stubs and
-        // will fail in a CI sandbox — their step still emits under the right
-        // index, just with status Error.
-        for expected_index in 0..=4 {
+        // require Done because the destructive stages hit real Docker tool
+        // stubs and will fail in a CI sandbox — their step still emits
+        // under the right index, just with status Error.
+        // Expected stages from the scripted tools:
+        //   find_image       → 1 (Locating how to run)
+        //   detect_runtime   → 2 (Setting up runtime)
+        //   install_profiler → 3 (Running + profiling)
+        //   run_profiling    → 3 (same stage)
+        //   analyze_samples  → 4 (Building thesis)
+        for expected_index in [1usize, 2, 3, 4] {
             assert!(
                 steps.iter().any(|s| s.index == expected_index
                     && matches!(s.status, StepStatus::Active)),
@@ -1157,11 +1696,12 @@ mod tests {
         .unwrap();
 
         // A destructive tool in Default mode → step marked Error + RunError.
+        // install_profiler now lives on stage 3 (Running + profiling).
         let events = sink.snapshot();
         assert!(
             events.iter().any(|e| matches!(e, CapturedEvent::Step(s)
-                if s.index == 2 && matches!(s.status, StepStatus::Error))),
-            "expected step 2 to surface as Error in Default mode"
+                if s.index == 3 && matches!(s.status, StepStatus::Error))),
+            "expected step 3 to surface as Error in Default mode"
         );
         assert!(events.iter().any(|e| matches!(e, CapturedEvent::Error(_))));
     }
