@@ -30,6 +30,13 @@ FIXTURE_js     := tests/fixtures/javascript-express notifyDownstream
 
 FIXTURE_KEYS   := python java ts js
 
+UNAME_S := $(shell uname -s)
+
+# Make cargo + cargo-installed binaries visible to recipes even on the same
+# `make` run that just installed them (rustup writes to ~/.cargo/bin, which
+# isn't on PATH until a new shell sources ~/.cargo/env).
+export PATH := $(HOME)/.cargo/bin:$(PATH)
+
 BLUE   := \033[1;34m
 GREEN  := \033[1;32m
 YELLOW := \033[1;33m
@@ -38,6 +45,7 @@ RESET  := \033[0m
 
 .DEFAULT_GOAL := demo
 .PHONY: demo test viewer \
+        setup install install-rust install-viewer check-rust \
         build release \
         test-verbose test-python test-java test-ts list-tests \
         demo-python demo-java demo-ts demo-js \
@@ -45,26 +53,53 @@ RESET  := \033[0m
         refresh refresh-python refresh-java refresh-ts refresh-js viewer-data \
         viewer-bun viewer-stop viewer-install viewer-build \
         diff-demo schema-validate \
-        watch clean help
+        watch clean distclean help
 
 ### Tier 1 (the 3 you'll use)
 
-demo: demo-python demo-java demo-ts demo-js ## ① ASCII analyzer output for every fixture
+demo: install build demo-python demo-java demo-ts demo-js ## ① ASCII analyzer output for every fixture
 
-test: ## ② Run the integration test suite
+test: check-rust ## ② Run the integration test suite
 	@printf "$(BLUE)▶$(RESET) cargo test --test integration\n"
 	@cargo test --test integration
 
-viewer: refresh viewer-stop ## ③ Refresh fixtures, then start the React viewer at :5180
+viewer: install refresh viewer-stop ## ③ Refresh fixtures, then start the React viewer at :5180
 	@printf "$(BLUE)▶$(RESET) Vite dev server (npm) → http://localhost:$(VIEWER_PORT)/\n"
 	@cd $(VIEWER_DIR) && npm run dev -- --port $(VIEWER_PORT)
 
+### Setup
+
+setup: install-rust install-viewer ## One-time machine setup (rust + viewer npm deps)
+	@printf "$(GREEN)✓$(RESET) drift-static-profiler is ready — try: make\n"
+
+install: check-rust install-viewer ## Ensure deps are present (called by demo/viewer)
+
+install-rust: ## Install rustup (writes to ~/.cargo, ~/.rustup, ~/.zshenv)
+	@if command -v cargo >/dev/null 2>&1; then \
+		printf "$(GREEN)✓$(RESET) rust already installed: $$(cargo --version)\n"; \
+	else \
+		printf "$(BLUE)▶$(RESET) installing rustup (default profile, stable toolchain)\n"; \
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile default; \
+		printf "$(YELLOW)!$(RESET) open a new terminal or: source \$$HOME/.cargo/env\n"; \
+	fi
+
+check-rust: ## Fail fast if cargo isn't on PATH
+	@command -v cargo >/dev/null 2>&1 || { \
+		printf "$(YELLOW)!$(RESET) Rust not installed. Run: make install-rust\n"; exit 1; }
+
+install-viewer: $(VIEWER_DIR)/node_modules/.package-lock.json ## npm install in viewer/ if needed
+
+$(VIEWER_DIR)/node_modules/.package-lock.json: $(VIEWER_DIR)/package.json $(VIEWER_DIR)/package-lock.json
+	@printf "$(BLUE)▶$(RESET) installing JS deps in $(VIEWER_DIR)/\n"
+	@cd $(VIEWER_DIR) && npm install
+	@touch $@
+
 ### Build
 
-build: ## cargo build (debug)
+build: check-rust ## cargo build (debug)
 	@cargo build
 
-release: ## cargo build --release
+release: check-rust ## cargo build --release
 	@cargo build --release
 
 $(BIN): build
@@ -151,10 +186,9 @@ viewer-data: refresh ## back-compat alias for `refresh`
 
 ### React viewer
 
-viewer-install: ## npm install in viewer/ (one-time)
-	@cd $(VIEWER_DIR) && npm install
+viewer-install: install-viewer ## back-compat alias for `install-viewer`
 
-viewer-bun: refresh viewer-stop ## Start dev server with bun on http://localhost:5180/
+viewer-bun: install-viewer refresh viewer-stop ## Start dev server with bun on http://localhost:5180/
 	@command -v bun >/dev/null 2>&1 || { \
 		printf "$(YELLOW)!$(RESET) bun not installed — see https://bun.sh/install\n"; exit 1; }
 	@printf "$(BLUE)▶$(RESET) Vite dev server (bun) → http://localhost:$(VIEWER_PORT)/\n"
@@ -171,7 +205,7 @@ viewer-stop: ## Kill whatever is listening on port 5180
 	    printf "$(GREEN)✓$(RESET) nothing on port $(VIEWER_PORT)\n"; \
 	  fi
 
-viewer-build: refresh ## Production build → viewer/dist/
+viewer-build: install-viewer refresh ## Production build → viewer/dist/
 	@cd $(VIEWER_DIR) && npm run build
 
 ### Diff & schema
@@ -210,8 +244,12 @@ sys.exit(0 if ok else 1)"
 watch: ## Re-run tests on file change (needs cargo-watch)
 	@cargo watch -x 'test --test integration -- --nocapture --test-threads=1'
 
-clean: ## cargo clean
+clean: ## cargo clean + drop viewer build output
 	@cargo clean
+	@rm -rf $(VIEWER_DIR)/dist
+
+distclean: clean ## Also drop viewer/node_modules (full reset)
+	@rm -rf $(VIEWER_DIR)/node_modules
 
 help: ## Show this help (auto-generated from inline doc strings)
 	@printf "\n$(BLUE)drift-static-profiler — make targets$(RESET)\n"
