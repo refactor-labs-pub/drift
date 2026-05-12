@@ -68,12 +68,20 @@ custom-protocol = ["tauri/custom-protocol"]
 # Mock HTTP server for the LLM stream / agent-turn integration test.
 wiremock = "0.6"
 
-# Known Dependabot alert: `glib 0.18.5` is pulled in transitively through
-# `tauri 2.11.1 → tray-icon/muda/tao → gtk 0.18.2 → glib ^0.18`. The fix
-# (`glib 0.20.0+`) cannot be applied here directly because `gtk 0.18`
-# hard-pins glib to the 0.18 series, and `tauri 2.x` (currently 2.11.1,
-# latest stable) is itself pinned to `gtk 0.18`. Bumping glib in isolation
-# is blocked until tauri upstream ships a release with `gtk 0.20+`. The
-# vulnerable code path (`glib::VariantStrIter` soundness) is also unreachable
-# from non-Linux targets — the gtk → glib chain is `cfg(target_os = "linux")`
-# only, so macOS/Windows builds don't compile it in.
+# Known Dependabot alert: RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g
+# (`glib::VariantStrIter` unsoundness). `glib 0.18.5` is pulled in
+# transitively through `tauri 2.11.1 → wry → webkit2gtk 2.0.x →
+# gtk 0.18.2 → glib ^0.18`. The fix (`glib 0.20.0+`) cannot be applied
+# here directly because `gtk 0.18` hard-pins glib to the 0.18 series,
+# and the gtk3-rs 0.18 line is end-of-life ("UNMAINTAINED — use gtk4
+# instead", per the gtk crate page on crates.io). Tauri 2 itself tracks
+# this as upstream-blocked — see tauri-apps/tauri#12048 (status: upstream)
+# — and the fix is gated on tauri/wry migrating to gtk4. The vulnerable
+# `VariantStrIter::impl_get` path is `cfg(target_os = "linux")` only,
+# so macOS/Windows builds don't even compile it in, and wry doesn't
+# invoke it in practice.
+#
+# Dependabot's PR noise for this advisory is silenced via the `ignore`
+# rule in `.github/dependabot.yml`. The alert itself can be dismissed
+# on the GitHub Security tab with reason "Vulnerable code is not
+# reachable" once an org-owner reviews it.

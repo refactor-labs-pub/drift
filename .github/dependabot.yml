@@ -1,0 +1,66 @@
+# Dependabot configuration — alerts + version updates.
+#
+# Dependabot alerts are always active for every manifest in the repo
+# regardless of this file. This config controls (a) which ecosystems
+# Dependabot opens version-update PRs for, and (b) which dependency
+# alerts to suppress when an upstream fix is unavailable.
+#
+# Docs:
+#   https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#   https://docs.github.com/en/code-security/dependabot/dependabot-security-updates
+version: 2
+updates:
+  # ─── npm projects ───────────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/drift-static-profiler/viewer"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/drift-lab/desktop-ui"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/web-app/web"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/action"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+
+  # ─── Rust projects ──────────────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/drift-static-profiler"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directory: "/drift-lab/src-tauri"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+    ignore:
+      # RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g —
+      # Unsoundness in `glib::VariantStrIter` (Iterator + DoubleEndedIterator).
+      #
+      # `glib 0.18.5` is pulled in transitively via:
+      #   tauri 2.x → wry → webkit2gtk 2.0.x → gtk 0.18.2 → glib ^0.18
+      # gtk 0.18 hard-pins `glib = "^0.18"`, and the gtk3-rs 0.18 line is
+      # end-of-life (the gtk crate page reads: "UNMAINTAINED — use gtk4
+      # instead"). Tauri 2 itself is tracking this as upstream-blocked:
+      #   https://github.com/tauri-apps/tauri/issues/12048 (status: upstream)
+      # The fix exists in glib 0.20+, but the entire gtk3-rs ecosystem
+      # would need to move there first, which is on tauri/wry's roadmap
+      # (Tauri 3 / future migration to gtk4).
+      #
+      # The vulnerable code path (`VariantStrIter::impl_get`) is only
+      # compiled on `cfg(target_os = "linux")` and is not invoked by
+      # Tauri or wry in practice — VariantStrIter is a niche GLib
+      # variant-iteration API. macOS and Windows builds are unaffected
+      # (they use WKWebView / WebView2, no glib at all).
+      #
+      # Ignored here until upstream provides a fix path.
+      - dependency-name: "glib"
+        versions: ["0.18.x"]
