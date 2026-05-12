@@ -51,7 +51,7 @@ RESET  := \033[0m
         test-verbose test-python test-java test-ts list-tests \
         demo-python demo-java demo-ts demo-js \
         tags-python tags-java tags-ts tags-js \
-        refresh refresh-python refresh-java refresh-ts refresh-js viewer-data \
+        refresh refresh-python refresh-java refresh-ts refresh-js refresh-insights-demo viewer-data \
         viewer-bun viewer-stop viewer-install viewer-build \
         scan scan-roots \
         diff-demo schema-validate \
@@ -170,8 +170,16 @@ tags-js: $(BIN) ## Raw tree-sitter tags for the JavaScript fixture
 
 ### Refresh viewer fixtures
 
-refresh: refresh-python refresh-java refresh-ts refresh-js ## Rerun ALL fixtures through the profiler
+refresh: refresh-python refresh-java refresh-ts refresh-js refresh-insights-demo ## Rerun ALL fixtures through the profiler
 	@printf "$(GREEN)✓$(RESET) all viewer fixtures regenerated from the profiler\n"
+
+refresh-insights-demo: $(BIN) ## Regenerate the synthetic insights-demo fixture (showcases findings)
+	@mkdir -p $(FIXTURE_OUT)
+	@$(BIN) analyze-root tests/fixtures/insights-demo \
+	  --name insights-demo \
+	  --out-dir $(FIXTURE_OUT) \
+	  --no-accessors > /dev/null
+	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/insights-demo.json\n"
 
 refresh-python: $(BIN) ## Rerun just the Python fixture
 	@mkdir -p $(FIXTURE_OUT)

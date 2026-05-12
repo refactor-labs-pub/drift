@@ -123,6 +123,17 @@
           "type": "array",
           "items": { "$ref": "#/$defs/RankedSymbol" },
           "description": "Symbols in an SCC of size > 1 (mutual recursion)."
+        },
+        "findings_by_kind": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Count of structured findings per kind across the project. Same shape as `categories`. See $defs/FindingKind for the enum.",
+          "examples": [{ "n_plus_one": 7, "noisy_log": 3 }]
+        },
+        "findings_top": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FindingTopRef" },
+          "description": "Top-N findings as `(node_id, kind, severity, line)` triples, sorted by severity DESC. The viewer resolves `node_id` via its existing call-tree node index."
         }
       }
     },
@@ -300,11 +311,16 @@
         },
         "n_plus_one_risk": {
           "type": "boolean",
-          "description": "True if a db/cache call is invoked inside a loop within this symbol's body."
+          "description": "True if a db/cache call is invoked inside a loop within this symbol's body. Derived from `findings` (kind=n_plus_one) when present."
         },
         "blocking_in_async": {
           "type": "boolean",
-          "description": "True if is_async and a db/network/io call is invoked outside an await expression."
+          "description": "True if is_async and a db/network/io call is invoked outside an await expression. Derived from `findings` (kind=blocking_in_async) when present."
+        },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Finding" },
+          "description": "Structured, severity-scored findings attached to this node. Replaces (and supersedes) the per-node booleans above; the booleans stay populated as derived convenience values."
         }
       }
     },
@@ -382,6 +398,68 @@
       "properties": {
         "type": { "type": "string", "examples": ["cpu", "wall", "alloc_objects", "alloc_space", "edges"] },
         "unit": { "type": "string", "enum": ["count", "nanoseconds", "microseconds", "milliseconds", "bytes", "edges"] }
+      }
+    },
+
+    "Severity": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Finding severity. Bumped by impact signals (subtree reach, pagerank, call-site count) via `bump_by_impact`."
+    },
+
+    "FindingKind": {
+      "type": "string",
+      "enum": [
+        "n_plus_one",
+        "blocking_in_async",
+        "recursive",
+        "smelly_loop",
+        "noisy_log",
+        "outdated_package",
+        "memory_explosion",
+        "hot_zone"
+      ],
+      "description": "Closed-set finding kind. New kinds are additive; viewers ignore unknown values."
+    },
+
+    "Evidence": {
+      "type": "object",
+      "description": "One concrete artifact supporting a finding. Usually a call site; `call` may also be a sentinel like `import` or `loop` for non-call evidence.",
+      "required": ["call", "line"],
+      "properties": {
+        "call": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "category": { "$ref": "#/$defs/Category" }
+      }
+    },
+
+    "Finding": {
+      "type": "object",
+      "description": "Structured, severity-scored issue attached to a CallTreeNode. The node provides the context (file, parent_class, metrics); this object provides the issue.",
+      "required": ["kind", "severity", "confidence", "line", "message"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/FindingKind" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "line": { "type": "integer", "minimum": 1, "description": "Call-site or relevant line within the symbol — NOT the symbol-start line." },
+        "message": { "type": "string" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" }
+        },
+        "remediation": { "type": "string" }
+      }
+    },
+
+    "FindingTopRef": {
+      "type": "object",
+      "description": "Pointer into the call tree for `Summary.findings_top`. `node_id` matches `CallTreeNode.id`.",
+      "required": ["node_id", "kind", "severity", "line"],
+      "properties": {
+        "node_id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/FindingKind" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "line": { "type": "integer", "minimum": 1 }
       }
     }
   }

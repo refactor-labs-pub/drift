@@ -2,6 +2,7 @@ pub mod api;
 pub mod categories;
 pub mod diff;
 pub mod graph;
+pub mod insights;
 pub mod linguist;
 pub mod metrics;
 pub mod parser;

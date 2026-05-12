@@ -106,7 +106,7 @@
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.17989761354389158
+        "score": 0.1798976135438916
       },
       {
         "name": "save",
@@ -134,35 +134,35 @@
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 8,
         "parent_class": "OrderRepository",
-        "score": 0.09196032350198473
+        "score": 0.0919603235019847
       },
       {
         "name": "notifyDownstream",
         "file": "tests/fixtures/javascript-express/src/routes.js",
         "line": 14,
         "parent_class": null,
-        "score": 0.09196032350198473
+        "score": 0.0919603235019847
       },
       {
         "name": "OrderService",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.09196032350198473
+        "score": 0.0919603235019847
       },
       {
         "name": "constructor",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 4,
         "parent_class": "OrderService",
-        "score": 0.09196032350198473
+        "score": 0.0919603235019847
       },
       {
         "name": "createOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 8,
         "parent_class": "OrderService",
-        "score": 0.09196032350198473
+        "score": 0.0919603235019847
       }
     ],
     "recursive_symbols": [],
@@ -176,7 +176,18 @@
       }
     ],
     "profiled_language": "JavaScript",
-    "profiled_language_percent": 100.0
+    "profiled_language_percent": 100.0,
+    "findings_by_kind": {
+      "blocking_in_async": 1
+    },
+    "findings_top": [
+      {
+        "node_id": "tests/fixtures/javascript-express/src/routes.js::::notifyDownstream",
+        "kind": "blocking_in_async",
+        "severity": "high",
+        "line": 15
+      }
+    ]
   },
   "entries": [
     {
@@ -216,11 +227,28 @@
       "is_async": true,
       "call_site_count": 0,
       "is_recursive": false,
-      "pagerank": 0.09196032350198473,
+      "pagerank": 0.0919603235019847,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,
-      "blocking_in_async": true
+      "blocking_in_async": true,
+      "findings": [
+        {
+          "kind": "blocking_in_async",
+          "severity": "high",
+          "confidence": 0.95,
+          "line": 15,
+          "message": "1 I/O call(s) in async `notifyDownstream` are not awaited: axios.post(). These block the event loop — defeating the point of `async`.",
+          "evidence": [
+            {
+              "call": "axios.post",
+              "line": 15,
+              "category": "network"
+            }
+          ],
+          "remediation": "Use the async client (e.g. `httpx.AsyncClient` instead of `requests`, `aiomysql` instead of `pymysql`) and `await` each call."
+        }
+      ]
     }
   ]
 }

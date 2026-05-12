@@ -44,6 +44,12 @@ export const FIXTURES: FixtureSpec[] = [
     description: 'POST /orders → OrdersService.createOrder → OrdersRepository.save (Slick db.run)',
   },
   {
+    key: 'insights-demo',
+    label: 'Insights Demo',
+    json: '/fixtures/insights-demo.json',
+    description: 'Synthetic Python file with N+1, blocking-in-async, and mutual recursion — to exercise the Insights + Scan Report pages',
+  },
+  {
     key: 'custom',
     label: 'Custom Scan',
     json: '/fixtures/custom.json',

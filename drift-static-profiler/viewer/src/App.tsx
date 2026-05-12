@@ -8,14 +8,15 @@ import { HotPaths } from './HotPaths';
 import { Smells } from './Smells';
 import { Statistics } from './Statistics';
 import { RootsView } from './RootsView';
-import { subtreeWeight } from './transform';
+import { Insights } from './Insights';
+import { ScanReport } from './ScanReport';
 import { TIPS } from './tooltips';
 import { Help } from './Help';
 import { Splitter, useResizablePanel } from './useResizableColumns';
-import type { CallTreeNode, Report } from './types';
+import type { CallTreeNode, FindingKind, Report } from './types';
 
 type FlameMode = 'kind' | 'category' | 'complexity' | 'smells';
-type BottomTab = 'tree' | 'roots' | 'hot' | 'smells' | 'stats';
+type BottomTab = 'report' | 'tree' | 'roots' | 'hot' | 'smells' | 'insights' | 'stats';
 
 export function App() {
   const [fixtureKey, setFixtureKey] = useState(FIXTURES[0].key);
@@ -33,6 +34,10 @@ export function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>('tree');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [flameZoomKey, setFlameZoomKey] = useState(0);
+  // When the ScanReport's findings breakdown is clicked, the Insights tab
+  // opens pre-filtered to that kind. Stored as a list so the Smells
+  // migration in step 13 can use the same plumbing for its preset.
+  const [insightsKindFilter, setInsightsKindFilter] = useState<FindingKind[] | null>(null);
 
   // Layout sizes — persisted to localStorage, dragged via Splitter components.
   // Defaults match the prior hard-coded grid (`1fr 340px` body, even vertical split).
@@ -79,8 +84,17 @@ export function App() {
         });
         setReport({ ...data, entries: sorted });
         setActiveRootId(sorted[0]?.id ?? null);
-        // Auto-switch to the Roots tab for multi-root scans (analyze-root output).
-        if (sorted.length >= ROOTS_TAB_THRESHOLD) {
+        // Tab-default policy: report > roots > tree.
+        // - report when the scan produced any findings (the most useful landing
+        //   when we have something to say)
+        // - roots when there are many entry points (multi-root scans)
+        // - tree otherwise (the historical default)
+        const hasFindings =
+          Object.keys(data.summary.findings_by_kind ?? {}).length > 0
+          || (data.summary.findings_top?.length ?? 0) > 0;
+        if (hasFindings) {
+          setBottomTab('report');
+        } else if (sorted.length >= ROOTS_TAB_THRESHOLD) {
           setBottomTab('roots');
         }
       })
@@ -228,6 +242,9 @@ export function App() {
             {!error && !activeRoot && <div style={emptyStyle}>no data</div>}
           </div>
           <div style={tabsStyle}>
+            <Tab active={bottomTab === 'report'} onClick={() => setBottomTab('report')} tip="One-screen scan report — health score, findings breakdown, hot zones, entry points.">
+              Scan Report
+            </Tab>
             <Tab active={bottomTab === 'tree'} onClick={() => setBottomTab('tree')} tip={TIPS.tab_call_tree}>
               Call Tree
             </Tab>
@@ -239,6 +256,9 @@ export function App() {
             </Tab>
             <Tab active={bottomTab === 'smells'} onClick={() => setBottomTab('smells')} tip={TIPS.tab_smells}>
               Smells{smellsCount(activeRoot) ? ` (${smellsCount(activeRoot)})` : ''}
+            </Tab>
+            <Tab active={bottomTab === 'insights'} onClick={() => setBottomTab('insights')} tip="Structured findings — N+1, blocking I/O, recursion, etc. with severity, evidence, and remediation hints.">
+              Insights{findingsCount(report) ? ` (${findingsCount(report)})` : ''}
             </Tab>
             <Tab active={bottomTab === 'stats'} onClick={() => setBottomTab('stats')} tip={TIPS.tab_statistics}>
               Statistics
@@ -253,6 +273,21 @@ export function App() {
             }}
           />
           <div style={bottomPanelStyle}>
+            {bottomTab === 'report' && (
+              <ScanReport
+                report={report}
+                onJump={jump}
+                onShowKind={(kind) => {
+                  setInsightsKindFilter([kind]);
+                  setBottomTab('insights');
+                }}
+                onPickRoot={(id) => {
+                  setActiveRootId(id);
+                  setSelected(null);
+                  setBottomTab('tree');
+                }}
+              />
+            )}
             {bottomTab === 'tree' && activeRoot && (
               <CallTreeView
                 root={activeRoot}
@@ -273,6 +308,13 @@ export function App() {
             )}
             {bottomTab === 'smells' && (
               <Smells root={activeRoot} onSelect={setSelected} />
+            )}
+            {bottomTab === 'insights' && (
+              <Insights
+                report={report}
+                presetKinds={insightsKindFilter ?? undefined}
+                onJump={jump}
+              />
             )}
             {bottomTab === 'stats' && (
               <Statistics summary={report?.summary ?? null} onJump={jump} />
@@ -309,13 +351,20 @@ function smellsCount(node: CallTreeNode | null): number {
   return n;
 }
 
-function findInTree(node: CallTreeNode, id: string): CallTreeNode | null {
-  if (node.id === id) return node;
-  for (const c of node.children) {
-    const hit = findInTree(c, id);
-    if (hit) return hit;
-  }
-  return null;
+/// Total number of structured findings across all entry trees. Prefers
+/// the cheap `findings_by_kind` rollup when present; falls back to
+/// walking the tree for older fixtures.
+function findingsCount(report: Report | null): number {
+  if (!report) return 0;
+  const byKind = report.summary.findings_by_kind;
+  if (byKind) return Object.values(byKind).reduce((a, b) => a + b, 0);
+  let n = 0;
+  const visit = (x: CallTreeNode) => {
+    n += x.findings?.length ?? 0;
+    for (const c of x.children) visit(c);
+  };
+  for (const e of report.entries) visit(e);
+  return n;
 }
 
 function Toolbar(props: {

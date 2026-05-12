@@ -1200,3 +1200,223 @@ fn graph_has_no_self_loops() {
 fn _silence(graph: &CallGraph, root: &Path) -> CallTreeNode {
     build_first_tree(graph, root, "create_order")
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase E: structured findings
+// ──────────────────────────────────────────────────────────────────────
+//
+// Each detector also fills `CallTreeNode.findings` with a structured
+// version of the same signal that drives the legacy booleans. The
+// booleans remain populated (derived from findings) so older code paths
+// keep working. These tests assert the structured payload alongside the
+// boolean — so we know the new shape is correct.
+
+#[test]
+fn n_plus_one_emits_structured_finding() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("n_plus_one_emits_structured_finding", "(synthetic SQLAlchemy)");
+
+    let src = "
+from sqlalchemy.orm import Session
+
+def bulk_save(items, session: Session):
+    for it in items:
+        session.add(it)
+        session.commit()
+";
+    let tags = extract_tags_from_source(Path::new("nplus1.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let id = graph.find_entry_points("bulk_save").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+
+    // Boolean (legacy) still set
+    assert!(node.n_plus_one_risk, "legacy bool must remain populated");
+
+    // Structured finding present, anchored at a call-site line (not the def line)
+    let np = node
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::NPlusOne)
+        .expect("n_plus_one finding should be present alongside the bool");
+    assert!(
+        np.line > node.line,
+        "finding line should be a call-site within the body, got {} (symbol starts at {})",
+        np.line, node.line,
+    );
+    assert!(
+        np.confidence > 0.0 && np.confidence <= 1.0,
+        "confidence in (0,1], got {}",
+        np.confidence,
+    );
+    assert!(
+        !np.evidence.is_empty(),
+        "n_plus_one finding must list at least one offending call as evidence",
+    );
+    assert!(
+        np.remediation.is_some(),
+        "n_plus_one finding should ship with a remediation hint",
+    );
+}
+
+#[test]
+fn blocking_in_async_emits_structured_finding() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("blocking_in_async_emits_structured_finding", "(synthetic)");
+
+    let src = "
+import requests
+
+async def fetch_user_blocking(uid):
+    return requests.get(f\"https://api.example.com/{uid}\")
+";
+    let tags = extract_tags_from_source(Path::new("block.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let id = graph
+        .find_entry_points("fetch_user_blocking")
+        .first()
+        .cloned()
+        .unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+
+    assert!(node.blocking_in_async, "legacy bool must remain populated");
+    let bia = node
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::BlockingInAsync)
+        .expect("blocking_in_async finding should be present alongside the bool");
+    assert!(!bia.evidence.is_empty());
+    assert!(bia.remediation.is_some());
+}
+
+#[test]
+fn recursive_emits_structured_finding_post_build() {
+    // Recursive findings are attached as a post-build pass in Report::build,
+    // not in tree::build_inner — verify they land.
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("recursive_emits_structured_finding_post_build", "(synthetic mutual recursion)");
+
+    let src = "
+def is_even(n):
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+def is_odd(n):
+    if n == 0:
+        return False
+    return is_even(n - 1)
+";
+    let tags = extract_tags_from_source(Path::new("rec.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("is_even").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let root = &report.entries[0];
+    assert!(root.is_recursive, "is_even should be in SCC of size 2");
+    assert!(
+        root.findings
+            .iter()
+            .any(|f| f.kind == FindingKind::Recursive),
+        "recursive finding should be attached by Report::build's post-build pass",
+    );
+}
+
+#[test]
+fn noisy_log_emits_structured_finding_when_log_in_loop() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("noisy_log_emits_structured_finding_when_log_in_loop", "(synthetic)");
+
+    let src = "
+import logging
+
+logger = logging.getLogger(__name__)
+
+def process_items(items):
+    for it in items:
+        logger.debug(\"processing %s\", it)
+";
+    let tags = extract_tags_from_source(Path::new("noisy.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let id = graph.find_entry_points("process_items").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+
+    let nl = node
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::NoisyLog)
+        .expect("noisy_log finding should be present when a log call is in a loop");
+    assert!(!nl.evidence.is_empty(), "noisy_log finding must carry evidence");
+    assert!(nl.remediation.is_some(), "noisy_log finding should ship with remediation");
+}
+
+#[test]
+fn summary_findings_top_and_by_kind_are_populated() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("summary_findings_top_and_by_kind_are_populated", "(synthetic)");
+
+    let src = "
+from sqlalchemy.orm import Session
+
+def bulk_save(items, session: Session):
+    for it in items:
+        session.add(it)
+        session.commit()
+";
+    let tags = extract_tags_from_source(Path::new("nplus1.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("bulk_save").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    assert_eq!(
+        report.summary.findings_by_kind.get("n_plus_one"),
+        Some(&1),
+        "summary rollup should count the single n_plus_one finding",
+    );
+    assert!(
+        report.summary.findings_top.iter().any(|t| matches!(t.kind, drift_static_profiler::insights::FindingKind::NPlusOne)),
+        "findings_top should surface the n_plus_one finding",
+    );
+}

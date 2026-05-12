@@ -2,6 +2,41 @@ export type SymbolKind = 'Function' | 'Method' | 'Class';
 
 export type Category = 'db' | 'network' | 'io' | 'cache' | 'queue' | 'log' | 'compute';
 
+export type Severity = 'low' | 'medium' | 'high';
+
+export type FindingKind =
+  | 'n_plus_one'
+  | 'blocking_in_async'
+  | 'recursive'
+  | 'smelly_loop'
+  | 'noisy_log'
+  | 'outdated_package'
+  | 'memory_explosion'
+  | 'hot_zone';
+
+export interface Evidence {
+  call: string;
+  line: number;
+  category?: Category;
+}
+
+export interface Finding {
+  kind: FindingKind;
+  severity: Severity;
+  confidence: number;
+  line: number;
+  message: string;
+  evidence?: Evidence[];
+  remediation?: string;
+}
+
+export interface FindingTopRef {
+  node_id: string;
+  kind: FindingKind;
+  severity: Severity;
+  line: number;
+}
+
 export interface ExternalCall {
   name: string;
   receiver?: string | null;
@@ -57,9 +92,13 @@ export interface CallTreeNode {
   percent_total: number;
   percent_parent: number;
 
-  // Phase D — risk flags
+  // Phase D — risk flags (derived from `findings` when present; kept as
+  // a convenience for older consumers and the flame-mode 'smells' painter)
   n_plus_one_risk: boolean;
   blocking_in_async: boolean;
+
+  // Phase E — structured findings (optional; older fixtures omit it)
+  findings?: Finding[];
 }
 
 export interface TopSymbol {
@@ -84,6 +123,13 @@ export interface RankedByScore {
   score: number;
 }
 
+export interface LanguageBreakdownEntry {
+  language: string;
+  bytes: number;
+  percent: number;
+  supported: boolean;
+}
+
 export interface Summary {
   languages: string[];
   files: number;
@@ -96,6 +142,15 @@ export interface Summary {
   dead_code: TopSymbol[];
   pagerank_top: RankedByScore[];
   recursive_symbols: TopSymbol[];
+
+  // GitHub-Linguist style language breakdown (always emitted by the profiler)
+  language_breakdown?: LanguageBreakdownEntry[];
+  profiled_language?: string | null;
+  profiled_language_percent?: number | null;
+
+  // Phase E — insights rollups (optional; older fixtures omit them)
+  findings_by_kind?: Record<string, number>;
+  findings_top?: FindingTopRef[];
 }
 
 export interface Generator {
@@ -136,4 +191,27 @@ export const CATEGORY_COLORS: Record<Category, string> = {
   queue:    '#d09bd1',
   log:      '#7e8189',
   compute:  '#5b8def',
+};
+
+// Severity palette intentionally aliases existing category colors so
+// nothing new gets introduced visually. red/orange/gray match the
+// existing semantic ranking.
+export const SEVERITY_COLORS: Record<Severity, string> = {
+  high:   '#e26d6d',
+  medium: '#e0a458',
+  low:    '#7e8189',
+};
+
+// Human labels for the eight finding kinds used by Insights / ScanReport.
+// Adding a kind on the Rust side without updating this map is harmless —
+// the UI falls back to the raw kind string.
+export const FINDING_KIND_LABEL: Record<FindingKind, string> = {
+  n_plus_one:        'N+1',
+  blocking_in_async: 'BLOCKING IN ASYNC',
+  recursive:         'RECURSIVE',
+  smelly_loop:       'SMELLY LOOP',
+  noisy_log:         'NOISY LOG',
+  outdated_package:  'OUTDATED PKG',
+  memory_explosion:  'MEMORY EXPLOSION',
+  hot_zone:          'HOT ZONE',
 };

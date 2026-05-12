@@ -1,5 +1,6 @@
 use crate::categories::Category;
 use crate::graph::CallGraph;
+use crate::insights::{self, FindingTopRef};
 use crate::linguist::{LanguageBreakdownEntry, LanguageStats};
 use crate::tree::CallTreeNode;
 use crate::{FileTags, Language};
@@ -39,6 +40,17 @@ pub struct Summary {
     pub profiled_language: Option<String>,
     /// Share of total programming bytes accounted for by `profiled_language`.
     pub profiled_language_percent: Option<f64>,
+
+    // ── Phase E: insights rollups ──
+    /// Count of findings per kind across every node in every tree.
+    /// Same shape as `categories`: kind-name → count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub findings_by_kind: BTreeMap<String, usize>,
+    /// Top-N findings as `(node_id, kind, severity, line)` triples, sorted
+    /// by severity DESC. Same role as `pagerank_top`. The viewer resolves
+    /// `node_id` via its existing `nodeIndex.byId` map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings_top: Vec<FindingTopRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +96,18 @@ impl Report {
         language_stats: &LanguageStats,
         source_root: Option<&Path>,
     ) -> Self {
+        // Phase E2: cross-tree finding passes that need graph-wide info.
+        // - attach_recursive_findings: SCC membership lives on the graph,
+        //   not on individual Symbols.
+        // - attach_hot_zones: pagerank percentile is a graph-wide quantity.
+        // Both run AFTER per-node detectors in `tree::build_inner` so they
+        // can read those findings too.
+        let pagerank_p90 = insights::compute_pagerank_p90(graph.pagerank.values().copied());
+        let mut entries = entries;
+        insights::attach_recursive_findings(&mut entries);
+        insights::attach_hot_log_findings(&mut entries, pagerank_p90);
+        insights::attach_hot_zones(&mut entries, pagerank_p90);
+
         let summary = Summary::build(all_tags, graph, &entries, language_stats);
         Self {
             schema_version: "1.0".into(),
@@ -280,6 +304,11 @@ impl Summary {
             .collect();
         recursive_symbols.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
 
+        // Phase E rollups — derived from `findings` already attached to
+        // each node by the per-node detectors and the post-build pass.
+        let findings_by_kind = insights::collect_findings_by_kind(entries);
+        let findings_top = insights::collect_findings_top(entries, 50);
+
         Self {
             languages,
             files: all_tags.len(),
@@ -295,6 +324,8 @@ impl Summary {
             language_breakdown: language_stats.breakdown.clone(),
             profiled_language: language_stats.dominant_supported_name.clone(),
             profiled_language_percent: language_stats.dominant_supported_percent,
+            findings_by_kind,
+            findings_top,
         }
     }
 }

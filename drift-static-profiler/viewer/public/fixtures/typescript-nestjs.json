@@ -150,70 +150,70 @@
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 10,
         "parent_class": "OrdersService",
-        "score": 0.11721755943455218
+        "score": 0.1172175594345522
       },
       {
         "name": "Order",
         "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
         "line": 4,
         "parent_class": null,
-        "score": 0.11441082541460026
+        "score": 0.11441082541460032
       },
       {
         "name": "create",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
         "line": 10,
         "parent_class": "OrdersController",
-        "score": 0.08044000938436509
+        "score": 0.08044000938436506
       },
       {
         "name": "save",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
         "line": 13,
         "parent_class": "OrdersRepository",
-        "score": 0.07746163026761436
+        "score": 0.07746163026761434
       },
       {
         "name": "buildOrder",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 16,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761436
+        "score": 0.07746163026761434
       },
       {
         "name": "validate",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 24,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761436
+        "score": 0.07746163026761434
       },
       {
         "name": "AppModule",
         "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
         "line": 18,
         "parent_class": null,
-        "score": 0.04141333772396718
+        "score": 0.04141333772396719
       },
       {
         "name": "bootstrap",
         "file": "tests/fixtures/typescript-nestjs/src/main.ts",
         "line": 5,
         "parent_class": null,
-        "score": 0.04141333772396718
+        "score": 0.04141333772396719
       },
       {
         "name": "CreateOrderDto",
         "file": "tests/fixtures/typescript-nestjs/src/orders/create-order.dto.ts",
         "line": 1,
         "parent_class": null,
-        "score": 0.04141333772396718
+        "score": 0.04141333772396719
       },
       {
         "name": "OrdersController",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
         "line": 6,
         "parent_class": null,
-        "score": 0.04141333772396718
+        "score": 0.04141333772396719
       }
     ],
     "recursive_symbols": [],
@@ -227,7 +227,18 @@
       }
     ],
     "profiled_language": "TypeScript",
-    "profiled_language_percent": 100.0
+    "profiled_language_percent": 100.0,
+    "findings_by_kind": {
+      "blocking_in_async": 1
+    },
+    "findings_top": [
+      {
+        "node_id": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts::OrdersRepository::save",
+        "kind": "blocking_in_async",
+        "severity": "high",
+        "line": 14
+      }
+    ]
   },
   "entries": [
     {
@@ -289,7 +300,7 @@
                   "is_async": false,
                   "call_site_count": 1,
                   "is_recursive": false,
-                  "pagerank": 0.11441082541460026,
+                  "pagerank": 0.11441082541460032,
                   "percent_total": 16.666666666666664,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -319,7 +330,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761436,
+              "pagerank": 0.07746163026761434,
               "percent_total": 33.33333333333333,
               "percent_parent": 40.0,
               "n_plus_one_risk": false,
@@ -357,7 +368,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761436,
+              "pagerank": 0.07746163026761434,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
@@ -408,11 +419,28 @@
               "is_async": true,
               "call_site_count": 2,
               "is_recursive": false,
-              "pagerank": 0.07746163026761436,
+              "pagerank": 0.07746163026761434,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
-              "blocking_in_async": true
+              "blocking_in_async": true,
+              "findings": [
+                {
+                  "kind": "blocking_in_async",
+                  "severity": "high",
+                  "confidence": 0.8,
+                  "line": 14,
+                  "message": "1 I/O call(s) in async `save` are not awaited: repo.save(). These block the event loop — defeating the point of `async`.",
+                  "evidence": [
+                    {
+                      "call": "repo.save",
+                      "line": 14,
+                      "category": "db"
+                    }
+                  ],
+                  "remediation": "Use the async client (e.g. `httpx.AsyncClient` instead of `requests`, `aiomysql` instead of `pymysql`) and `await` each call."
+                }
+              ]
             }
           ],
           "truncated_reason": null,
@@ -440,7 +468,7 @@
           "is_async": true,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.11721755943455218,
+          "pagerank": 0.1172175594345522,
           "percent_total": 83.33333333333334,
           "percent_parent": 83.33333333333334,
           "n_plus_one_risk": false,
@@ -472,7 +500,7 @@
       "is_async": true,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.08044000938436509,
+      "pagerank": 0.08044000938436506,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

@@ -1,6 +1,7 @@
 #![allow(clippy::needless_borrow)]
 use crate::categories::Category;
 use crate::graph::{CallGraph, ExternalCall, SymbolId};
+use crate::insights::{self, Finding};
 use crate::SymbolKind;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -56,6 +57,13 @@ pub struct CallTreeNode {
     // ── Phase D: risk flags ──
     pub n_plus_one_risk: bool,
     pub blocking_in_async: bool,
+
+    // ── Phase E: structured findings ──
+    // Empty in step 1+2; populated by detectors in subsequent steps.
+    // The Phase D booleans above stay populated as derived convenience
+    // values computed from this list so older consumers keep working.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<Finding>,
 }
 
 pub struct TreeBuilder<'a> {
@@ -122,28 +130,14 @@ impl<'a> TreeBuilder<'a> {
 
         let externals = self.graph.externals_of(id).to_vec();
         let category_self = pick_self_category(&externals);
-        // Phase D: compute risk flags before we move externals into the node.
-        // We exclude PascalCase callees because those are constructors
-        // (e.g. `httpx.AsyncClient()`, `new HttpClient()`) — they don't perform
-        // blocking I/O or N+1 queries; only methods on them do.
-        let is_method_call = |name: &str| {
-            !name
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_uppercase())
-                .unwrap_or(false)
-        };
-        let n_plus_one_risk = externals.iter().any(|e| {
-            e.in_loop
-                && is_method_call(&e.name)
-                && matches!(e.category, Category::Db | Category::Cache)
-        });
-        let blocking_in_async = sym.is_async
-            && externals.iter().any(|e| {
-                !e.in_await
-                    && is_method_call(&e.name)
-                    && matches!(e.category, Category::Db | Category::Network | Category::Io)
-            });
+        // Phase E: collect structured findings via the insights module.
+        // The legacy Phase D booleans (`n_plus_one_risk`, `blocking_in_async`)
+        // are now DERIVED from these findings so older consumers and the
+        // flame-mode 'smells' painter keep working unchanged.
+        let ctx = insights::Ctx::default();
+        let findings = insights::collect_node_findings(sym, &externals, &ctx);
+        let n_plus_one_risk = insights::has_kind(&findings, insights::FindingKind::NPlusOne);
+        let blocking_in_async = insights::has_kind(&findings, insights::FindingKind::BlockingInAsync);
 
         let callers = self
             .graph
@@ -207,6 +201,7 @@ impl<'a> TreeBuilder<'a> {
             percent_parent: 0.0,
             n_plus_one_risk,
             blocking_in_async,
+            findings,
         };
 
         if is_cycle {
