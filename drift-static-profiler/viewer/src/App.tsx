@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { FIXTURES } from './fixtures';
 import { FlameView } from './FlameView';
 import { CallTreeView } from './CallTreeView';
@@ -19,7 +20,14 @@ type FlameMode = 'kind' | 'category' | 'complexity' | 'smells';
 type BottomTab = 'report' | 'tree' | 'roots' | 'hot' | 'smells' | 'insights' | 'stats';
 
 export function App() {
-  const [fixtureKey, setFixtureKey] = useState(FIXTURES[0].key);
+  // Fixture identity now lives in the URL (`/scan/:fixtureKey`). The
+  // dropdown changes call `navigate(`/scan/<key>`)` instead of setState
+  // so refresh / back / share all work.
+  const params = useParams<{ fixtureKey: string }>();
+  const navigate = useNavigate();
+  const fixtureKey = (params.fixtureKey && FIXTURES.find(f => f.key === params.fixtureKey)?.key)
+    ?? FIXTURES[0].key;
+  const setFixtureKey = (k: string) => navigate(`/scan/${k}`);
   // Default to the Roots tab when the loaded report has many entries (the
   // signature of `make scan-roots` output, where the entry dropdown alone
   // would be unwieldy). Threshold matches "more than what a `make scan`

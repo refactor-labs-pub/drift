@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import {
   CATEGORY_COLORS,
   FINDING_KIND_LABEL,
@@ -101,12 +102,26 @@ export function ScanReport({ report, onJump, onShowKind, onPickRoot }: Props) {
 // ─── Header ──────────────────────────────────────────────────────────────
 
 function Header({ report }: { report: Report }) {
+  // Pull the active fixture from the URL so we can build a deep link to
+  // the dedicated full-page Scan Report at /scan/:fixtureKey/report.
+  const { fixtureKey } = useParams<{ fixtureKey: string }>();
   const root = report.generator?.source_root ?? '';
   const base = root ? root.replace(/[/\\]+$/, '').split(/[/\\]/).pop() : null;
   return (
     <div style={headerStyle}>
-      <div style={headerTitleStyle}>
-        scan report{base ? ` — .../${base}` : ''}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap' }}>
+        <div style={headerTitleStyle}>
+          scan report{base ? ` — .../${base}` : ''}
+        </div>
+        {fixtureKey && (
+          <Link
+            to={`/scan/${fixtureKey}/report`}
+            style={openFullLinkStyle}
+            title="Open this scan report as its own page — bookmarkable, shareable, every row is a deep link."
+          >
+            Open as full page →
+          </Link>
+        )}
       </div>
       <div style={headerSubStyle}>
         {report.generator?.tool ?? 'drift-static-profiler'} {report.generator?.version ?? ''}
@@ -121,6 +136,19 @@ function Header({ report }: { report: Report }) {
     </div>
   );
 }
+
+const openFullLinkStyle: React.CSSProperties = {
+  textDecoration: 'none',
+  background: 'transparent',
+  border: '1px solid #5b8def',
+  color: '#5b8def',
+  fontSize: 10,
+  padding: '3px 9px',
+  borderRadius: 3,
+  textTransform: 'uppercase',
+  letterSpacing: 0.4,
+  fontWeight: 600,
+};
 
 // ─── Health gauge ────────────────────────────────────────────────────────
 
