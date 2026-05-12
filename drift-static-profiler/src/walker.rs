@@ -61,6 +61,21 @@ pub fn discover_source_files(root: &Path) -> Vec<(PathBuf, Language)> {
 }
 
 pub fn discover_source_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, Language)> {
+    walk_files_with(root, opts)
+        .into_iter()
+        .filter_map(|(p, _)| Language::from_path(&p).map(|l| (p, l)))
+        .collect()
+}
+
+/// Walk every file under `root` honoring the same ignore semantics as
+/// [`discover_source_files_with`], but WITHOUT filtering by language. Returns
+/// `(path, byte_len)` per file.
+///
+/// This is the entry point the linguist-style byte counter uses: it needs to
+/// see *all* source-shaped files (including Rust, Go, etc. we don't profile)
+/// so the language percentages it computes reflect the whole repo, not just
+/// the languages whose tree-sitter parsers we ship.
+pub fn walk_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, u64)> {
     let mut wb = WalkBuilder::new(root);
 
     // `standard_filters(true)` is a shortcut that enables:
@@ -92,9 +107,8 @@ pub fn discover_source_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf,
         if opts.apply_defaults && hits_default_ignore(path) {
             continue;
         }
-        if let Some(lang) = Language::from_path(path) {
-            out.push((path.to_path_buf(), lang));
-        }
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        out.push((path.to_path_buf(), size));
     }
     out
 }

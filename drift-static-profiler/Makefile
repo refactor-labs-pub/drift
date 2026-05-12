@@ -52,6 +52,7 @@ RESET  := \033[0m
         tags-python tags-java tags-ts tags-js \
         refresh refresh-python refresh-java refresh-ts refresh-js viewer-data \
         viewer-bun viewer-stop viewer-install viewer-build \
+        scan scan-roots \
         diff-demo schema-validate \
         watch clean distclean help
 
@@ -207,6 +208,75 @@ viewer-stop: ## Kill whatever is listening on port 5180
 
 viewer-build: install-viewer refresh ## Production build → viewer/dist/
 	@cd $(VIEWER_DIR) && npm run build
+
+### Custom scan (any path → viewer)
+
+# Point the profiler at any folder on disk and have the result show up in the
+# viewer as the "Custom Scan" fixture. Override SCAN_PATH, ENTRY, and
+# (optionally) NAME on the command line.
+#
+#   make scan SCAN_PATH=/Users/me/code/myproj ENTRY=handleRequest
+#   make scan SCAN_PATH=../other-repo         ENTRY="createOrder updateOrder"
+#   make scan SCAN_PATH=./some/dir            ENTRY=main NAME=myproj
+#
+# ENTRY accepts a single name OR a space-separated list (quote the value).
+# Then `make viewer` (or refresh your open tab) and choose "Custom Scan".
+# Allow a positional path: `make scan-roots /abs/path` or `make scan /abs/path ...`
+# Treat any extra goals after scan/scan-roots as args: first one → SCAN_PATH,
+# and stub them out as no-op targets so make doesn't try to build them.
+ifneq ($(filter scan scan-roots,$(MAKECMDGOALS)),)
+  SCAN_POSITIONAL := $(filter-out scan scan-roots,$(MAKECMDGOALS))
+  ifneq ($(SCAN_POSITIONAL),)
+    SCAN_PATH ?= $(firstword $(SCAN_POSITIONAL))
+    $(eval $(SCAN_POSITIONAL):;@:)
+  endif
+endif
+
+SCAN_PATH  ?=
+ENTRY      ?=
+NAME       ?= custom
+
+scan: $(BIN) ## Analyze any folder and write it as viewer/public/fixtures/<NAME>.json
+	@if [ -z "$(SCAN_PATH)" ]; then \
+	  printf "$(YELLOW)!$(RESET) usage: make scan /abs/path ENTRY=symName [NAME=fixture_name]\n"; \
+	  printf "          or: make scan SCAN_PATH=/abs/path ENTRY=symName [NAME=fixture_name]\n"; \
+	  printf "   tip: ENTRY=\"foo bar baz\" passes multiple entry points\n"; \
+	  exit 1; \
+	fi
+	@ENTRIES=""; \
+	  for e in $(ENTRY); do ENTRIES="$$ENTRIES --entry $$e"; done; \
+	  printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) → $(FIXTURE_OUT)/$(NAME).json\n"; \
+	  $(BIN) scan "$(SCAN_PATH)" $$ENTRIES --name "$(NAME)" --out-dir "$(FIXTURE_OUT)" --no-accessors
+
+# Root-level profile: auto-discover every plausible entry point in a folder
+# (symbols with no in-graph caller, ranked by transitive reach) and profile
+# each one. The viewer's "Roots" tab renders a sortable table; click any row
+# to drill into that root's flame graph + call tree.
+#
+# This is the static-analysis analog of Chrome DevTools' Top-Down view,
+# pprof's `top -cum`, or Speedscope's Sandwich view.
+#
+#   make scan-roots SCAN_PATH=/Users/me/code/myproj
+#   make scan-roots SCAN_PATH=./some/dir NAME=myproj-roots MIN_REACH=4
+#
+MIN_REACH  ?= 2
+MAX_ROOTS  ?= 200
+ROOTS_NAME ?= roots
+
+scan-roots: $(BIN) ## Auto-discover root entry points and write a multi-root profile JSON
+	@if [ -z "$(SCAN_PATH)" ]; then \
+	  printf "$(YELLOW)!$(RESET) usage: make scan-roots /abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
+	  printf "          or: make scan-roots SCAN_PATH=/abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
+	  exit 1; \
+	fi
+	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) → $(FIXTURE_OUT)/$(ROOTS_NAME).json\n"
+	@$(BIN) analyze-root "$(SCAN_PATH)" \
+	  --name "$(ROOTS_NAME)" \
+	  --out-dir "$(FIXTURE_OUT)" \
+	  --min-reach $(MIN_REACH) \
+	  --max-roots $(MAX_ROOTS) \
+	  --no-accessors \
+	  --print
 
 ### Diff & schema
 

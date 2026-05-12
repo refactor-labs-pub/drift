@@ -1,12 +1,19 @@
+pub mod api;
 pub mod categories;
 pub mod diff;
 pub mod graph;
+pub mod linguist;
 pub mod metrics;
 pub mod parser;
 pub mod report;
+pub mod roots;
 pub mod tags;
 pub mod tree;
 pub mod walker;
+
+pub use api::{analyze, analyze_roots, AnalyzeOptions, AnalyzeOutcome};
+pub use linguist::{compute_language_stats, LanguageStats};
+pub use roots::{discover_roots, DiscoverOpts, DiscoveredRoot};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -17,6 +24,9 @@ pub enum Language {
     Java,
     TypeScript,
     JavaScript,
+    Go,
+    Rust,
+    Scala,
 }
 
 impl Language {
@@ -27,6 +37,9 @@ impl Language {
             "java" => Some(Self::Java),
             "ts" | "tsx" => Some(Self::TypeScript),
             "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "go" => Some(Self::Go),
+            "rs" => Some(Self::Rust),
+            "scala" | "sc" => Some(Self::Scala),
             _ => None,
         }
     }

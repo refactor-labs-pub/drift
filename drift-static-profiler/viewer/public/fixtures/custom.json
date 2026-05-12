@@ -1,0 +1,320 @@
+{
+  "schema_version": "1.0",
+  "mode": "static",
+  "generator": {
+    "tool": "drift-static-profiler",
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/javascript-express"
+  },
+  "summary": {
+    "languages": [
+      "javascript"
+    ],
+    "files": 4,
+    "symbols": 9,
+    "edges": 4,
+    "categories": {
+      "cache": 0,
+      "compute": 0,
+      "db": 0,
+      "io": 0,
+      "log": 0,
+      "network": 0,
+      "queue": 0
+    },
+    "top_callers": [
+      {
+        "name": "OrderRepository",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 3,
+        "parent_class": null,
+        "count": 1
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 14,
+        "parent_class": "OrderService",
+        "count": 1
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 4,
+        "parent_class": "OrderRepository",
+        "count": 1
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 22,
+        "parent_class": "OrderService",
+        "count": 1
+      }
+    ],
+    "top_callees": [
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 8,
+        "parent_class": "OrderService",
+        "count": 3
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 4,
+        "parent_class": "OrderService",
+        "count": 1
+      }
+    ],
+    "hot_paths": [],
+    "dead_code": [
+      {
+        "name": "findById",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 8,
+        "parent_class": "OrderRepository",
+        "count": 0
+      },
+      {
+        "name": "notifyDownstream",
+        "file": "tests/fixtures/javascript-express/src/routes.js",
+        "line": 14,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 4,
+        "parent_class": "OrderService",
+        "count": 0
+      }
+    ],
+    "pagerank_top": [
+      {
+        "name": "OrderRepository",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 3,
+        "parent_class": null,
+        "score": 0.1798976135438916
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 4,
+        "parent_class": "OrderRepository",
+        "score": 0.12010025631539493
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 14,
+        "parent_class": "OrderService",
+        "score": 0.12010025631539493
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 22,
+        "parent_class": "OrderService",
+        "score": 0.12010025631539493
+      },
+      {
+        "name": "findById",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 8,
+        "parent_class": "OrderRepository",
+        "score": 0.0919603235019847
+      },
+      {
+        "name": "notifyDownstream",
+        "file": "tests/fixtures/javascript-express/src/routes.js",
+        "line": 14,
+        "parent_class": null,
+        "score": 0.0919603235019847
+      },
+      {
+        "name": "OrderService",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 3,
+        "parent_class": null,
+        "score": 0.0919603235019847
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 4,
+        "parent_class": "OrderService",
+        "score": 0.0919603235019847
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 8,
+        "parent_class": "OrderService",
+        "score": 0.0919603235019847
+      }
+    ],
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "JavaScript",
+        "bytes": 1798,
+        "files": 4,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "JavaScript",
+    "profiled_language_percent": 100.0
+  },
+  "entries": [
+    {
+      "id": "tests/fixtures/javascript-express/src/service.js::OrderService::createOrder",
+      "name": "createOrder",
+      "kind": "Method",
+      "file": "src/service.js",
+      "line": 8,
+      "depth": 0,
+      "parent_class": "OrderService",
+      "children": [
+        {
+          "id": "tests/fixtures/javascript-express/src/service.js::OrderService::buildOrder",
+          "name": "buildOrder",
+          "kind": "Method",
+          "file": "src/service.js",
+          "line": 14,
+          "depth": 1,
+          "parent_class": "OrderService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/javascript-express/src/service.js::OrderService::createOrder",
+              "name": "createOrder",
+              "file": "src/service.js",
+              "line": 8,
+              "parent_class": "OrderService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 2,
+          "loc": 7,
+          "nesting_depth": 0,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.12010025631539493,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/javascript-express/src/service.js::OrderService::validate",
+          "name": "validate",
+          "kind": "Method",
+          "file": "src/service.js",
+          "line": 22,
+          "depth": 1,
+          "parent_class": "OrderService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/javascript-express/src/service.js::OrderService::createOrder",
+              "name": "createOrder",
+              "file": "src/service.js",
+              "line": 8,
+              "parent_class": "OrderService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 4,
+          "loc": 8,
+          "nesting_depth": 1,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.12010025631539493,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/javascript-express/src/repository.js::OrderRepository::save",
+          "name": "save",
+          "kind": "Method",
+          "file": "src/repository.js",
+          "line": 4,
+          "depth": 1,
+          "parent_class": "OrderRepository",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/javascript-express/src/service.js::OrderService::createOrder",
+              "name": "createOrder",
+              "file": "src/service.js",
+              "line": 8,
+              "parent_class": "OrderService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 3,
+          "nesting_depth": 0,
+          "parameter_count": 1,
+          "is_async": true,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.12010025631539493,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [],
+      "callers_count": 0,
+      "callees_count": 3,
+      "subtree_size": 4,
+      "category_self": null,
+      "categories_reached": {},
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 5,
+      "nesting_depth": 0,
+      "parameter_count": 1,
+      "is_async": true,
+      "call_site_count": 0,
+      "is_recursive": false,
+      "pagerank": 0.0919603235019847,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    }
+  ]
+}

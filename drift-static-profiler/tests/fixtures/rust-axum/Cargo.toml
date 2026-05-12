@@ -1,0 +1,8 @@
+[package]
+name = "orders-svc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Fixture used by drift-static-profiler integration tests. Not actually
+# compiled — drift parses these sources with tree-sitter only.

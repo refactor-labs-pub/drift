@@ -74,10 +74,26 @@ pub fn classify(
     receiver: Option<&str>,
     imports: &[ImportRecord],
 ) -> Option<Classification> {
-    // Tier B: receiver bound to an imported categorized module
+    // Tier B: receiver bound to an imported categorized module.
+    //
+    // Two match shapes:
+    //   1. Direct: receiver equals the import's local binding. Python's
+    //      `import sqlalchemy` + `sqlalchemy.func()` lands here.
+    //   2. Crate-root / package-root: receiver equals the first segment of
+    //      the module path. Rust's `use sqlx::PgPool` does NOT shadow the
+    //      crate root, so `sqlx::query_as()` still resolves to the sqlx
+    //      crate even though the local binding is `PgPool`. Same shape in
+    //      Java: `import com.foo.Bar; com.foo.…()`. We always check the
+    //      first segment regardless of separator (`.`, `::`, `/`).
     if let Some(r) = receiver {
         for imp in imports {
-            if imp.local_name == r {
+            let direct = imp.local_name == r;
+            let root_segment = imp
+                .module_path
+                .split(|c: char| c == '.' || c == '/' || c == ':')
+                .find(|s| !s.is_empty());
+            let root_match = root_segment == Some(r);
+            if direct || root_match {
                 if let Some(cat) = classify_module(&imp.module_path) {
                     return Some(Classification {
                         category: cat,
@@ -121,6 +137,10 @@ pub fn classify_module(module: &str) -> Option<Category> {
         if module == *prefix
             || module.starts_with(&format!("{prefix}."))
             || module.starts_with(&format!("{prefix}/"))
+            // Rust uses `::` between crate root and child paths
+            // (`sqlx::PgPool`). Without this branch, none of the Rust
+            // crate-rooted entries in MODULE_CATALOG would ever match.
+            || module.starts_with(&format!("{prefix}::"))
         {
             return Some(*cat);
         }
@@ -285,6 +305,117 @@ const MODULE_CATALOG: &[(&str, Category)] = &[
     ("pino", Category::Log),
     ("bunyan", Category::Log),
     ("@nestjs/common", Category::Log), // Logger lives here (best-effort)
+
+    // ─── GO (module paths from `import "..."`) ─────────────────────────────
+    // The Go importer strips surrounding quotes in tags.rs so paths land here
+    // looking like `database/sql`, `github.com/jackc/pgx/v5`, etc.
+    // DB / ORM
+    ("database/sql", Category::Db),
+    ("gorm.io/gorm", Category::Db),
+    ("gorm.io", Category::Db),
+    ("github.com/jmoiron/sqlx", Category::Db),
+    ("github.com/jackc/pgx", Category::Db),
+    ("github.com/lib/pq", Category::Db),
+    ("github.com/go-sql-driver/mysql", Category::Db),
+    ("github.com/mattn/go-sqlite3", Category::Db),
+    ("go.mongodb.org/mongo-driver", Category::Db),
+    ("github.com/uptrace/bun", Category::Db),
+    ("entgo.io/ent", Category::Db),
+    ("github.com/redis/go-redis", Category::Cache),
+    ("github.com/go-redis/redis", Category::Cache),
+    ("github.com/gomodule/redigo", Category::Cache),
+    ("github.com/bradfitz/gomemcache", Category::Cache),
+    // HTTP / network
+    ("net/http", Category::Network),
+    ("net/rpc", Category::Network),
+    ("net", Category::Network),
+    ("google.golang.org/grpc", Category::Network),
+    ("github.com/go-resty/resty", Category::Network),
+    ("github.com/valyala/fasthttp", Category::Network),
+    ("github.com/aws/aws-sdk-go", Category::Network),
+    ("github.com/aws/aws-sdk-go-v2", Category::Network),
+    // File / IO
+    ("os", Category::Io),
+    ("io/ioutil", Category::Io),
+    ("io/fs", Category::Io),
+    ("io", Category::Io),
+    ("path/filepath", Category::Io),
+    // Queues / messaging
+    ("github.com/segmentio/kafka-go", Category::Queue),
+    ("github.com/IBM/sarama", Category::Queue),
+    ("github.com/Shopify/sarama", Category::Queue),
+    ("github.com/streadway/amqp", Category::Queue),
+    ("github.com/rabbitmq/amqp091-go", Category::Queue),
+    ("github.com/nats-io/nats.go", Category::Queue),
+    // Logging
+    ("log", Category::Log),
+    ("log/slog", Category::Log),
+    ("go.uber.org/zap", Category::Log),
+    ("github.com/rs/zerolog", Category::Log),
+    ("github.com/sirupsen/logrus", Category::Log),
+
+    // ─── RUST (crate-rooted paths from `use ...`) ───────────────────────────
+    // The Rust importer captures the scoped_identifier text, so paths come
+    // through as `sqlx::PgPool`, `tokio::fs`, etc. Prefix matching catches the
+    // crate root.
+    // DB / ORM
+    ("sqlx", Category::Db),
+    ("diesel", Category::Db),
+    ("sea_orm", Category::Db),
+    ("rusqlite", Category::Db),
+    ("postgres", Category::Db),       // tokio_postgres re-uses this prefix
+    ("tokio_postgres", Category::Db),
+    ("mongodb", Category::Db),
+    ("mongo_driver", Category::Db),
+    ("redis", Category::Cache),
+    ("memcache", Category::Cache),
+    ("elasticsearch", Category::Db),
+    // HTTP / network
+    ("reqwest", Category::Network),
+    ("hyper", Category::Network),
+    ("axum", Category::Network),
+    ("actix_web", Category::Network),
+    ("rocket", Category::Network),
+    ("warp", Category::Network),
+    ("tonic", Category::Network),
+    ("tower_http", Category::Network),
+    // File / IO
+    ("std::fs", Category::Io),
+    ("tokio::fs", Category::Io),
+    ("async_std::fs", Category::Io),
+    // Queues
+    ("rdkafka", Category::Queue),
+    ("lapin", Category::Queue),
+    // Logging
+    ("log", Category::Log),
+    ("tracing", Category::Log),
+    ("slog", Category::Log),
+    ("env_logger", Category::Log),
+
+    // ─── SCALA (package paths from `import ...`) ────────────────────────────
+    // Slick is Scala's most popular FRM; Doobie is the Cats-Effect-flavored
+    // JDBC layer. Akka HTTP / Play / http4s cover the web side.
+    // DB / ORM
+    ("slick", Category::Db),
+    ("slick.jdbc", Category::Db),
+    ("doobie", Category::Db),
+    ("io.getquill", Category::Db),
+    ("scalikejdbc", Category::Db),
+    ("anorm", Category::Db),
+    ("reactivemongo", Category::Db),
+    ("org.mongodb.scala", Category::Db),
+    // HTTP / network
+    ("akka.http", Category::Network),
+    ("play.api.libs.ws", Category::Network),
+    ("sttp", Category::Network),
+    ("org.http4s", Category::Network),
+    ("com.softwaremill.sttp", Category::Network),
+    // Queues
+    ("akka.kafka", Category::Queue),
+    ("fs2.kafka", Category::Queue),
+    // Logging
+    ("org.log4s", Category::Log),
+    ("com.typesafe.scalalogging", Category::Log),
 ];
 
 /// Receiver-name patterns — strong hints even when type info is missing.

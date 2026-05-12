@@ -592,7 +592,7 @@ def helper():             # called by main_handler → NOT dead
         .unwrap();
     let tb = TreeBuilder::new(&graph, Path::new(""));
     let entry_node = tb.build(&entry_id).unwrap();
-    let report = Report::build(&[tags], &graph, vec![entry_node]);
+    let report = Report::build(&[tags], &graph, vec![entry_node], &Default::default(), None);
 
     let names: Vec<&str> = report.summary.dead_code.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"truly_unused"), "truly_unused should be in dead_code; got {names:?}");
@@ -635,7 +635,7 @@ def bulk_save(items, session: Session):
     let id = graph.find_entry_points("bulk_save").first().cloned().unwrap();
     let tb = TreeBuilder::new(&graph, Path::new(""));
     let node = tb.build(&id).unwrap();
-    let _report = Report::build(&[tags], &graph, vec![node.clone()]);
+    let _report = Report::build(&[tags], &graph, vec![node.clone()], &Default::default(), None);
 
     assert!(
         node.n_plus_one_risk,
@@ -672,7 +672,7 @@ def save_one(items, session):
     let id = graph.find_entry_points("save_one").first().cloned().unwrap();
     let tb = TreeBuilder::new(&graph, Path::new(""));
     let node = tb.build(&id).unwrap();
-    let _ = Report::build(&[tags], &graph, vec![node.clone()]);
+    let _ = Report::build(&[tags], &graph, vec![node.clone()], &Default::default(), None);
 
     assert!(
         !node.n_plus_one_risk,
@@ -764,6 +764,376 @@ fn call_site_count_geq_callers_count() {
     }
 }
 
+// --------- Go / Rust / Scala fixture E2E ---------
+//
+// These exercise the full pipeline against on-disk fixtures (mirroring the
+// Python/Java/TS coverage above): walker discovery → linguist language pick →
+// tags extraction across files → cross-file call-graph resolution → tree build
+// with category propagation. Without these, a regression that drops one
+// language from the walker or breaks cross-file resolution could ship
+// unnoticed because the inline-source tests below only feed a single file.
+
+#[test]
+fn go_fixture_handler_reaches_repo_save_with_db_category() {
+    use drift_static_profiler::{analyze, AnalyzeOptions};
+    banner("go_fixture_handler_reaches_repo_save_with_db_category", "go-gin");
+    let root = fixture("go-gin");
+    let outcome = analyze(
+        &root,
+        &["CreateOrder".into()],
+        &AnalyzeOptions::default(),
+    )
+    .expect("analyze");
+    let report = &outcome.report;
+    assert_eq!(outcome.profiled_language, Some(drift_static_profiler::Language::Go));
+    assert!(report.summary.languages.iter().any(|l| l == "go"));
+    // The Save method must propagate as a DB call. Tree categories aggregate
+    // the whole subtree, so the top-level "create_order" entry should see db>0.
+    let total_db = report
+        .summary
+        .categories
+        .get("db")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        total_db > 0,
+        "expected db>0 from `database/sql` Exec inside repo.Save; categories={:?}",
+        report.summary.categories
+    );
+    // Cross-file resolution check: at least one entry tree must contain the
+    // string "Save" via names_in_subtree.
+    let any = report
+        .entries
+        .iter()
+        .any(|e| names_in_subtree(e).iter().any(|n| n == "Save"));
+    assert!(
+        any,
+        "handler.CreateOrder should transitively reach repo.Save via service.CreateOrder"
+    );
+}
+
+#[test]
+fn rust_fixture_handler_reaches_repo_save_with_db_category() {
+    use drift_static_profiler::{analyze, AnalyzeOptions};
+    banner("rust_fixture_handler_reaches_repo_save_with_db_category", "rust-axum");
+    let root = fixture("rust-axum");
+    let outcome = analyze(
+        &root,
+        &["create_order".into()],
+        &AnalyzeOptions::default(),
+    )
+    .expect("analyze");
+    let report = &outcome.report;
+    assert_eq!(outcome.profiled_language, Some(drift_static_profiler::Language::Rust));
+    assert!(report.summary.languages.iter().any(|l| l == "rust"));
+    // sqlx::query_as / .fetch_one inside repo.save → DB. Category should
+    // propagate up.
+    let total_db = report
+        .summary
+        .categories
+        .get("db")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        total_db > 0,
+        "expected db>0 from sqlx::query_as inside save; categories={:?}",
+        report.summary.categories
+    );
+    // impl-method parent class must come through containment.
+    let has_repo_save = report.entries.iter().any(|e| {
+        names_in_subtree(e).iter().any(|n| n == "save")
+    });
+    assert!(has_repo_save, "save method should appear in the call tree");
+}
+
+#[test]
+fn scala_fixture_handler_reaches_repo_save_with_db_category() {
+    use drift_static_profiler::{analyze, AnalyzeOptions};
+    banner("scala_fixture_handler_reaches_repo_save_with_db_category", "scala-play");
+    let root = fixture("scala-play");
+    let outcome = analyze(
+        &root,
+        &["createOrder".into()],
+        &AnalyzeOptions::default(),
+    )
+    .expect("analyze");
+    let report = &outcome.report;
+    assert_eq!(outcome.profiled_language, Some(drift_static_profiler::Language::Scala));
+    assert!(report.summary.languages.iter().any(|l| l == "scala"));
+    let total_db = report
+        .summary
+        .categories
+        .get("db")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        total_db > 0,
+        "expected db>0 from slick db.run inside repo.save; categories={:?}",
+        report.summary.categories
+    );
+    let has_save = report
+        .entries
+        .iter()
+        .any(|e| names_in_subtree(e).iter().any(|n| n == "save"));
+    assert!(has_save, "save method should appear in the Scala call tree");
+}
+
+#[test]
+fn report_json_validates_against_schema_for_each_new_language() {
+    // End-to-end schema conformance: emit the JSON for each new-language
+    // fixture, parse the published schema, and assert the JSON matches.
+    // Without this gate, the report could grow a field that's missing
+    // (or malformed) in the schema and viewer consumers would silently
+    // break on upgrade.
+    use drift_static_profiler::{analyze, AnalyzeOptions};
+    use jsonschema::Validator;
+    use std::path::PathBuf;
+    banner("report_json_validates_against_schema_for_each_new_language", "(all new)");
+
+    let schema_path = {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("schema/profile.schema.json");
+        p
+    };
+    let schema_raw = std::fs::read(&schema_path).expect("read schema");
+    let schema_json: serde_json::Value =
+        serde_json::from_slice(&schema_raw).expect("parse schema JSON");
+    let validator = Validator::new(&schema_json).expect("build validator");
+
+    for (fix, entry) in [
+        ("go-gin", "CreateOrder"),
+        ("rust-axum", "create_order"),
+        ("scala-play", "createOrder"),
+    ] {
+        let root = fixture(fix);
+        let outcome = analyze(&root, &[entry.into()], &AnalyzeOptions::default())
+            .expect("analyze");
+        let report_json = serde_json::to_value(&outcome.report).expect("serialize");
+        let errors: Vec<String> = validator
+            .iter_errors(&report_json)
+            .map(|e| format!("{}: {}", e.instance_path(), e))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "schema violations for fixture {fix}: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn cli_binary_emits_valid_json_for_new_languages() {
+    // True E2E: spawn the built `drift-static-profiler` binary and parse its
+    // stdout JSON. This catches anything `cargo test` alone misses — broken
+    // arg parsing, missing serde fields, an stdout/stderr mix-up that
+    // contaminates the JSON, etc. We use `CARGO_BIN_EXE_drift-static-profiler`,
+    // which cargo sets to the built binary path for `tests/` integrations.
+    use std::process::Command;
+    banner("cli_binary_emits_valid_json_for_new_languages", "(all new via CLI)");
+
+    let bin = env!("CARGO_BIN_EXE_drift-static-profiler");
+    for (fix, entry) in [
+        ("go-gin", "CreateOrder"),
+        ("rust-axum", "create_order"),
+        ("scala-play", "createOrder"),
+    ] {
+        let root = fixture(fix);
+        let out = Command::new(bin)
+            .args(["analyze", "--json", "--entry", entry])
+            .arg(&root)
+            .output()
+            .expect("spawn binary");
+        assert!(
+            out.status.success(),
+            "binary failed for {fix}: stderr=\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "stdout for {fix} was not valid JSON: {e}\nstdout=\n{}\nstderr=\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            )
+        });
+        // Sanity assertions on the JSON shape so a silently-empty report
+        // (e.g. wrong language picked) trips the test.
+        let summary = v.get("summary").expect("summary present");
+        let files = summary.get("files").and_then(|x| x.as_u64()).unwrap_or(0);
+        let symbols = summary.get("symbols").and_then(|x| x.as_u64()).unwrap_or(0);
+        let profiled = summary
+            .get("profiled_language")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        assert!(files > 0, "{fix}: expected files>0, got {files}");
+        assert!(symbols > 0, "{fix}: expected symbols>0, got {symbols}");
+        assert!(
+            !profiled.is_empty(),
+            "{fix}: profiled_language should be non-empty"
+        );
+    }
+}
+
+// --------- Go / Rust / Scala (inline-source E2E) ---------
+//
+// These exercise the full pipeline (tree-sitter parse → tags → graph) without
+// needing on-disk fixtures. They protect against grammar regressions and make
+// it cheap to grow the test set as we touch the queries.
+
+#[test]
+fn go_method_calls_resolve_through_call_graph() {
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("go_method_calls_resolve_through_call_graph", "(inline Go)");
+
+    let src = "package main\n\
+               import \"fmt\"\n\
+               type Service struct{}\n\
+               func (s *Service) Greet(name string) string {\n\
+                 return fmt.Sprintf(\"hi %s\", name)\n\
+               }\n\
+               func main() {\n\
+                 s := &Service{}\n\
+                 s.Greet(\"world\")\n\
+               }\n";
+    let tags = extract_tags_from_source(Path::new("svc.go"), Language::Go, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    // Both Greet and main extracted as symbols.
+    assert!(tags.symbols.iter().any(|s| s.name == "Greet"));
+    assert!(tags.symbols.iter().any(|s| s.name == "main"));
+
+    // s.Greet inside main must resolve to the Greet method as an edge.
+    let main_id = graph.find_entry_points("main").first().cloned().unwrap();
+    let greet_id = graph.find_entry_points("Greet").first().cloned().unwrap();
+    assert!(
+        graph.callees(&main_id).contains(&greet_id),
+        "main should call Greet; callees: {:?}",
+        graph.callees(&main_id)
+    );
+
+    // The `fmt` import must be recorded with quotes stripped (otherwise
+    // category classification can't substring-match the module path).
+    assert!(
+        tags.imports.iter().any(|i| i.module_path == "fmt"),
+        "fmt import should be recorded without surrounding quotes; got {:?}",
+        tags.imports
+    );
+}
+
+#[test]
+fn rust_impl_method_calls_resolve() {
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("rust_impl_method_calls_resolve", "(inline Rust)");
+
+    let src = "struct Repo;\n\
+               impl Repo {\n\
+                 fn save(&self) -> u32 { 42 }\n\
+               }\n\
+               fn handler(r: &Repo) -> u32 {\n\
+                 r.save()\n\
+               }\n";
+    let tags = extract_tags_from_source(Path::new("lib.rs"), Language::Rust, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    // save is inside impl Repo, so its parent must be Repo via containment.
+    let save = tags.symbols.iter().find(|s| s.name == "save").expect("save");
+    assert_eq!(save.parent.as_deref(), Some("Repo"));
+
+    // handler must call save.
+    let handler_id = graph
+        .find_entry_points("handler")
+        .first()
+        .cloned()
+        .unwrap();
+    let save_id = graph.find_entry_points("save").first().cloned().unwrap();
+    assert!(
+        graph.callees(&handler_id).contains(&save_id),
+        "handler should call save; callees: {:?}",
+        graph.callees(&handler_id)
+    );
+}
+
+#[test]
+fn rust_scoped_call_resolves() {
+    // Path-qualified calls like `Mod::foo()` should still produce a ref.name
+    // of "foo" so by-name resolution can hit a defined `foo`.
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("rust_scoped_call_resolves", "(inline Rust)");
+
+    let src = "mod things {\n\
+                 pub fn build() -> u32 { 1 }\n\
+               }\n\
+               fn caller() -> u32 { things::build() }\n";
+    let tags = extract_tags_from_source(Path::new("lib.rs"), Language::Rust, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+
+    let caller_id = graph.find_entry_points("caller").first().cloned().unwrap();
+    let build_id = graph.find_entry_points("build").first().cloned().unwrap();
+    assert!(
+        graph.callees(&caller_id).contains(&build_id),
+        "caller should call things::build → build; callees: {:?}",
+        graph.callees(&caller_id)
+    );
+}
+
+#[test]
+fn rust_turbofish_calls_resolve() {
+    // `foo::<T>()` and `chain.collect::<Vec<_>>()` are wrapped in
+    // generic_function nodes; without an explicit pattern for that they
+    // disappear from the call graph entirely.
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("rust_turbofish_calls_resolve", "(inline Rust)");
+
+    let src = "fn build<T>() -> Option<T> { None }\n\
+               fn caller() -> Option<u32> { build::<u32>() }\n";
+    let tags = extract_tags_from_source(Path::new("lib.rs"), Language::Rust, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+
+    let caller_id = graph.find_entry_points("caller").first().cloned().unwrap();
+    let build_id = graph.find_entry_points("build").first().cloned().unwrap();
+    assert!(
+        graph.callees(&caller_id).contains(&build_id),
+        "caller should call build::<u32>() → build; callees: {:?}",
+        graph.callees(&caller_id)
+    );
+}
+
+#[test]
+fn scala_method_call_resolves() {
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("scala_method_call_resolves", "(inline Scala)");
+
+    let src = "object Repo {\n  def save(): Int = 1\n}\n\
+               object Handler {\n  def run(): Int = Repo.save()\n}\n";
+    let tags = extract_tags_from_source(Path::new("App.scala"), Language::Scala, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    // save defined; run defined.
+    assert!(tags.symbols.iter().any(|s| s.name == "save"));
+    assert!(tags.symbols.iter().any(|s| s.name == "run"));
+
+    let run_id = graph.find_entry_points("run").first().cloned().unwrap();
+    let save_id = graph.find_entry_points("save").first().cloned().unwrap();
+    assert!(
+        graph.callees(&run_id).contains(&save_id),
+        "run should call Repo.save → save; callees: {:?}",
+        graph.callees(&run_id)
+    );
+}
+
 // --------- cross-cutting sanity ---------
 
 #[test]
@@ -780,6 +1150,35 @@ fn walker_discovers_three_languages() {
     let root = fixture("typescript-nestjs");
     let ts = discover_source_files(&root);
     assert!(ts.iter().any(|(_, l)| matches!(l, drift_static_profiler::Language::TypeScript)));
+}
+
+#[test]
+fn from_path_recognizes_new_language_extensions() {
+    // The walker delegates extension-to-language mapping to
+    // `Language::from_path`. Lock in the new mappings so a typo in
+    // lib.rs's extension list doesn't silently drop files from analysis.
+    use drift_static_profiler::Language;
+    use std::path::Path;
+    banner("from_path_recognizes_new_language_extensions", "(unit)");
+
+    assert_eq!(
+        Language::from_path(Path::new("server/main.go")),
+        Some(Language::Go)
+    );
+    assert_eq!(
+        Language::from_path(Path::new("src/lib.rs")),
+        Some(Language::Rust)
+    );
+    assert_eq!(
+        Language::from_path(Path::new("App.scala")),
+        Some(Language::Scala)
+    );
+    assert_eq!(
+        Language::from_path(Path::new("worksheet.sc")),
+        Some(Language::Scala)
+    );
+    // sanity: unknown still returns None
+    assert_eq!(Language::from_path(Path::new("README.md")), None);
 }
 
 #[test]

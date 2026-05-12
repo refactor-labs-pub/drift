@@ -25,4 +25,34 @@ export const FIXTURES: FixtureSpec[] = [
     json: '/fixtures/javascript-express.json',
     description: 'POST /orders → service → Mongoose model + axios webhook',
   },
+  {
+    key: 'go-gin',
+    label: 'Go · net/http handler',
+    json: '/fixtures/go-gin.json',
+    description: 'POST /orders → service.CreateOrder → repository.Save',
+  },
+  {
+    key: 'rust-axum',
+    label: 'Rust · Axum + sqlx',
+    json: '/fixtures/rust-axum.json',
+    description: 'POST /orders → service.create_order → repo.save (sqlx::query_as)',
+  },
+  {
+    key: 'scala-play',
+    label: 'Scala · Play + Slick',
+    json: '/fixtures/scala-play.json',
+    description: 'POST /orders → OrdersService.createOrder → OrdersRepository.save (Slick db.run)',
+  },
+  {
+    key: 'custom',
+    label: 'Custom Scan',
+    json: '/fixtures/custom.json',
+    description: 'Output of `make scan PATH=… ENTRY=…` — pick after running it',
+  },
+  {
+    key: 'roots',
+    label: 'Root Profile (auto-discovered)',
+    json: '/fixtures/roots.json',
+    description: 'Output of `make scan-roots SCAN_PATH=…` — every plausible entry ranked by reach',
+  },
 ];

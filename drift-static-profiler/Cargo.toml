@@ -19,12 +19,21 @@ tree-sitter-python = "0.23"
 tree-sitter-java = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-scala = "0.26"
 ignore = "0.4"
 petgraph = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+# Validates emitted JSON reports against the published schema in the
+# `report_json_validates_against_schema_for_each_new_language` integration
+# test. Dev-only — runtime users do not pay for it.
+jsonschema = { version = "0.46", default-features = false }
 
 [profile.release]
 lto = "fat"

@@ -1,0 +1,569 @@
+{
+  "schema_version": "1.0",
+  "mode": "static",
+  "generator": {
+    "tool": "drift-static-profiler",
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/rust-axum"
+  },
+  "summary": {
+    "languages": [
+      "rust"
+    ],
+    "files": 4,
+    "symbols": 13,
+    "edges": 4,
+    "categories": {
+      "cache": 0,
+      "compute": 0,
+      "db": 4,
+      "io": 0,
+      "log": 0,
+      "network": 0,
+      "queue": 0
+    },
+    "top_callers": [
+      {
+        "name": "build_order",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 26,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "create_order",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 12,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 19,
+        "parent_class": "OrdersRepository",
+        "count": 1
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 40,
+        "parent_class": "OrdersService",
+        "count": 1
+      }
+    ],
+    "top_callees": [
+      {
+        "name": "create_order",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 12,
+        "parent_class": "OrdersService",
+        "count": 3
+      },
+      {
+        "name": "create_order",
+        "file": "tests/fixtures/rust-axum/src/handler.rs",
+        "line": 14,
+        "parent_class": null,
+        "count": 1
+      }
+    ],
+    "hot_paths": [
+      {
+        "frames": [
+          "create_order",
+          "OrdersService.create_order",
+          "OrdersRepository.save"
+        ],
+        "depth": 2,
+        "terminal_category": "db"
+      },
+      {
+        "frames": [
+          "OrdersService.create_order",
+          "OrdersRepository.save"
+        ],
+        "depth": 1,
+        "terminal_category": "db"
+      }
+    ],
+    "dead_code": [
+      {
+        "name": "new",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 15,
+        "parent_class": "OrdersRepository",
+        "count": 0
+      },
+      {
+        "name": "find_by_id",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 32,
+        "parent_class": "OrdersRepository",
+        "count": 0
+      },
+      {
+        "name": "new",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 8,
+        "parent_class": "OrdersService",
+        "count": 0
+      }
+    ],
+    "pagerank_top": [
+      {
+        "name": "create_order",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 12,
+        "parent_class": "OrdersService",
+        "score": 0.12414178343871281
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 19,
+        "parent_class": "OrdersRepository",
+        "score": 0.1019723170819367
+      },
+      {
+        "name": "build_order",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 26,
+        "parent_class": "OrdersService",
+        "score": 0.1019723170819367
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/rust-axum/src/service.rs",
+        "line": 40,
+        "parent_class": "OrdersService",
+        "score": 0.1019723170819367
+      },
+      {
+        "name": "CreateOrderDto",
+        "file": "tests/fixtures/rust-axum/src/handler.rs",
+        "line": 8,
+        "parent_class": null,
+        "score": 0.06332680725727526
+      },
+      {
+        "name": "create_order",
+        "file": "tests/fixtures/rust-axum/src/handler.rs",
+        "line": 14,
+        "parent_class": null,
+        "score": 0.06332680725727526
+      },
+      {
+        "name": "Order",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 3,
+        "parent_class": null,
+        "score": 0.06332680725727526
+      },
+      {
+        "name": "OrdersRepository",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 14,
+        "parent_class": null,
+        "score": 0.06332680725727526
+      },
+      {
+        "name": "find_by_id",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 32,
+        "parent_class": "OrdersRepository",
+        "score": 0.06332680725727526
+      },
+      {
+        "name": "new",
+        "file": "tests/fixtures/rust-axum/src/repo.rs",
+        "line": 15,
+        "parent_class": "OrdersRepository",
+        "score": 0.06332680725727526
+      }
+    ],
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "Rust",
+        "bytes": 3406,
+        "files": 4,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "Rust",
+    "profiled_language_percent": 100.0
+  },
+  "entries": [
+    {
+      "id": "tests/fixtures/rust-axum/src/handler.rs::::create_order",
+      "name": "create_order",
+      "kind": "Function",
+      "file": "src/handler.rs",
+      "line": 14,
+      "depth": 0,
+      "parent_class": null,
+      "children": [
+        {
+          "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+          "name": "create_order",
+          "kind": "Function",
+          "file": "src/service.rs",
+          "line": 12,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [
+            {
+              "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::build_order",
+              "name": "build_order",
+              "kind": "Function",
+              "file": "src/service.rs",
+              "line": 26,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+                  "name": "create_order",
+                  "file": "src/service.rs",
+                  "line": 12,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 1,
+              "loc": 8,
+              "nesting_depth": 1,
+              "parameter_count": 4,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.1019723170819367,
+              "percent_total": 20.0,
+              "percent_parent": 25.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::validate",
+              "name": "validate",
+              "kind": "Function",
+              "file": "src/service.rs",
+              "line": 40,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+                  "name": "create_order",
+                  "file": "src/service.rs",
+                  "line": 12,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 3,
+              "loc": 9,
+              "nesting_depth": 1,
+              "parameter_count": 2,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.1019723170819367,
+              "percent_total": 20.0,
+              "percent_parent": 25.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/rust-axum/src/repo.rs::OrdersRepository::save",
+              "name": "save",
+              "kind": "Function",
+              "file": "src/repo.rs",
+              "line": 19,
+              "depth": 2,
+              "parent_class": "OrdersRepository",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+                  "name": "create_order",
+                  "file": "src/service.rs",
+                  "line": 12,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": "db",
+              "categories_reached": {
+                "db": 2
+              },
+              "external_calls": [
+                {
+                  "name": "query_as",
+                  "receiver": "sqlx",
+                  "category": "db",
+                  "tier": "imported_module",
+                  "evidence": "receiver `sqlx` imported from `sqlx::PgPool`",
+                  "line": 20,
+                  "in_loop": false,
+                  "in_await": true
+                }
+              ],
+              "complexity": 1,
+              "loc": 12,
+              "nesting_depth": 0,
+              "parameter_count": 2,
+              "is_async": true,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.1019723170819367,
+              "percent_total": 20.0,
+              "percent_parent": 25.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/rust-axum/src/handler.rs::::create_order",
+              "name": "create_order",
+              "file": "src/handler.rs",
+              "line": 14,
+              "parent_class": null
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 3,
+          "subtree_size": 4,
+          "category_self": null,
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 8,
+          "nesting_depth": 0,
+          "parameter_count": 4,
+          "is_async": true,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.12414178343871281,
+          "percent_total": 80.0,
+          "percent_parent": 80.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [],
+      "callers_count": 0,
+      "callees_count": 1,
+      "subtree_size": 5,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 5,
+      "loc": 10,
+      "nesting_depth": 1,
+      "parameter_count": 2,
+      "is_async": true,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.06332680725727526,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    },
+    {
+      "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+      "name": "create_order",
+      "kind": "Function",
+      "file": "src/service.rs",
+      "line": 12,
+      "depth": 0,
+      "parent_class": "OrdersService",
+      "children": [
+        {
+          "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::build_order",
+          "name": "build_order",
+          "kind": "Function",
+          "file": "src/service.rs",
+          "line": 26,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+              "name": "create_order",
+              "file": "src/service.rs",
+              "line": 12,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 8,
+          "nesting_depth": 1,
+          "parameter_count": 4,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.1019723170819367,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::validate",
+          "name": "validate",
+          "kind": "Function",
+          "file": "src/service.rs",
+          "line": 40,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+              "name": "create_order",
+              "file": "src/service.rs",
+              "line": 12,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 3,
+          "loc": 9,
+          "nesting_depth": 1,
+          "parameter_count": 2,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.1019723170819367,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/rust-axum/src/repo.rs::OrdersRepository::save",
+          "name": "save",
+          "kind": "Function",
+          "file": "src/repo.rs",
+          "line": 19,
+          "depth": 1,
+          "parent_class": "OrdersRepository",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/rust-axum/src/service.rs::OrdersService::create_order",
+              "name": "create_order",
+              "file": "src/service.rs",
+              "line": 12,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": "db",
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [
+            {
+              "name": "query_as",
+              "receiver": "sqlx",
+              "category": "db",
+              "tier": "imported_module",
+              "evidence": "receiver `sqlx` imported from `sqlx::PgPool`",
+              "line": 20,
+              "in_loop": false,
+              "in_await": true
+            }
+          ],
+          "complexity": 1,
+          "loc": 12,
+          "nesting_depth": 0,
+          "parameter_count": 2,
+          "is_async": true,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.1019723170819367,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [
+        {
+          "id": "tests/fixtures/rust-axum/src/handler.rs::::create_order",
+          "name": "create_order",
+          "file": "src/handler.rs",
+          "line": 14,
+          "parent_class": null
+        }
+      ],
+      "callers_count": 1,
+      "callees_count": 3,
+      "subtree_size": 4,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 8,
+      "nesting_depth": 0,
+      "parameter_count": 4,
+      "is_async": true,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.12414178343871281,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    }
+  ]
+}

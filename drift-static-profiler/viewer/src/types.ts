@@ -98,7 +98,14 @@ export interface Summary {
   recursive_symbols: TopSymbol[];
 }
 
+export interface Generator {
+  tool: string;
+  version: string;
+  source_root?: string;
+}
+
 export interface Report {
+  generator?: Generator;
   summary: Summary;
   entries: CallTreeNode[];
 }

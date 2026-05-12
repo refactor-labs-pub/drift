@@ -118,15 +118,28 @@ pub fn extract_tags_from_source(
             });
         }
         if let Some(module) = import_module {
+            // Go's tree-sitter grammar models import paths as
+            // `interpreted_string_literal`, which preserves the surrounding
+            // quotes in the captured text. Strip them so module_path is
+            // comparable to the unquoted dotted-name forms emitted by every
+            // other language query (matters for category classification,
+            // which substring-matches module paths).
+            let module_clean = module.trim_matches('"').trim_matches('`');
             let local_name = import_alias
                 .map(|s| s.to_string())
                 .or_else(|| import_name.map(|s| s.to_string()))
-                .unwrap_or_else(|| module.rsplit('.').next().unwrap_or(module).to_string())
+                .unwrap_or_else(|| {
+                    module_clean
+                        .rsplit(|c| c == '.' || c == '/')
+                        .next()
+                        .unwrap_or(module_clean)
+                        .to_string()
+                })
                 .trim_matches('"')
                 .to_string();
             imports.push(ImportRecord {
                 local_name,
-                module_path: module.to_string(),
+                module_path: module_clean.to_string(),
                 imported_name: import_name.map(|s| s.to_string()),
                 line: import_line,
             });

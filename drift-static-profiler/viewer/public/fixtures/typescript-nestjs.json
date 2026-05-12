@@ -3,7 +3,8 @@
   "mode": "static",
   "generator": {
     "tool": "drift-static-profiler",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/typescript-nestjs"
   },
   "summary": {
     "languages": [
@@ -149,42 +150,42 @@
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 10,
         "parent_class": "OrdersService",
-        "score": 0.11721755943455223
+        "score": 0.11721755943455217
       },
       {
         "name": "Order",
         "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
         "line": 4,
         "parent_class": null,
-        "score": 0.11441082541460029
+        "score": 0.11441082541460028
       },
       {
         "name": "create",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
         "line": 10,
         "parent_class": "OrdersController",
-        "score": 0.08044000938436513
+        "score": 0.0804400093843651
       },
       {
         "name": "save",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
         "line": 13,
         "parent_class": "OrdersRepository",
-        "score": 0.07746163026761439
+        "score": 0.07746163026761438
       },
       {
         "name": "buildOrder",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 16,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761439
+        "score": 0.07746163026761438
       },
       {
         "name": "validate",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 24,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761439
+        "score": 0.07746163026761438
       },
       {
         "name": "AppModule",
@@ -215,7 +216,18 @@
         "score": 0.04141333772396719
       }
     ],
-    "recursive_symbols": []
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "TypeScript",
+        "bytes": 3678,
+        "files": 8,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "TypeScript",
+    "profiled_language_percent": 100.0
   },
   "entries": [
     {
@@ -277,7 +289,7 @@
                   "is_async": false,
                   "call_site_count": 1,
                   "is_recursive": false,
-                  "pagerank": 0.11441082541460029,
+                  "pagerank": 0.11441082541460028,
                   "percent_total": 16.666666666666664,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -307,7 +319,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761439,
+              "pagerank": 0.07746163026761438,
               "percent_total": 33.33333333333333,
               "percent_parent": 40.0,
               "n_plus_one_risk": false,
@@ -345,7 +357,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761439,
+              "pagerank": 0.07746163026761438,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
@@ -396,7 +408,7 @@
               "is_async": true,
               "call_site_count": 2,
               "is_recursive": false,
-              "pagerank": 0.07746163026761439,
+              "pagerank": 0.07746163026761438,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
@@ -428,7 +440,7 @@
           "is_async": true,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.11721755943455223,
+          "pagerank": 0.11721755943455217,
           "percent_total": 83.33333333333334,
           "percent_parent": 83.33333333333334,
           "n_plus_one_risk": false,
@@ -460,7 +472,7 @@
       "is_async": true,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.08044000938436513,
+      "pagerank": 0.0804400093843651,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

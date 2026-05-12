@@ -3,7 +3,8 @@
   "mode": "static",
   "generator": {
     "tool": "drift-static-profiler",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/python-fastapi"
   },
   "summary": {
     "languages": [
@@ -150,7 +151,7 @@
         "file": "tests/fixtures/python-fastapi/app/models.py",
         "line": 7,
         "parent_class": null,
-        "score": 0.15102921499233524
+        "score": 0.1510292149923352
       },
       {
         "name": "save",
@@ -178,45 +179,56 @@
         "file": "tests/fixtures/python-fastapi/app/repositories.py",
         "line": 4,
         "parent_class": null,
-        "score": 0.08455745618498178
+        "score": 0.08455745618498181
       },
       {
         "name": "OrderService",
         "file": "tests/fixtures/python-fastapi/app/services.py",
         "line": 5,
         "parent_class": null,
-        "score": 0.08455745618498178
+        "score": 0.08455745618498181
       },
       {
         "name": "create_order",
         "file": "tests/fixtures/python-fastapi/app/services.py",
         "line": 9,
         "parent_class": "OrderService",
-        "score": 0.08455745618498178
+        "score": 0.08455745618498181
       },
       {
         "name": "get_session",
         "file": "tests/fixtures/python-fastapi/app/db.py",
         "line": 8,
         "parent_class": null,
-        "score": 0.06464509715347132
+        "score": 0.06464509715347135
       },
       {
         "name": "__init__",
         "file": "tests/fixtures/python-fastapi/app/repositories.py",
         "line": 5,
         "parent_class": "OrderRepository",
-        "score": 0.06464509715347132
+        "score": 0.06464509715347135
       },
       {
         "name": "find_by_id",
         "file": "tests/fixtures/python-fastapi/app/repositories.py",
         "line": 14,
         "parent_class": "OrderRepository",
-        "score": 0.06464509715347132
+        "score": 0.06464509715347135
       }
     ],
-    "recursive_symbols": []
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "Python",
+        "bytes": 2520,
+        "files": 7,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "Python",
+    "profiled_language_percent": 100.0
   },
   "entries": [
     {
@@ -269,7 +281,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.15102921499233524,
+              "pagerank": 0.1510292149923352,
               "percent_total": 20.0,
               "percent_parent": 50.0,
               "n_plus_one_risk": false,
@@ -440,7 +452,7 @@
       "is_async": false,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.08455745618498178,
+      "pagerank": 0.08455745618498181,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,
@@ -487,7 +499,7 @@
           "is_async": false,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.08455745618498178,
+          "pagerank": 0.08455745618498181,
           "percent_total": 12.5,
           "percent_parent": 12.5,
           "n_plus_one_risk": false,
@@ -525,7 +537,7 @@
           "is_async": false,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.08455745618498178,
+          "pagerank": 0.08455745618498181,
           "percent_total": 12.5,
           "percent_parent": 12.5,
           "n_plus_one_risk": false,
@@ -581,7 +593,7 @@
                   "is_async": false,
                   "call_site_count": 1,
                   "is_recursive": false,
-                  "pagerank": 0.15102921499233524,
+                  "pagerank": 0.1510292149923352,
                   "percent_total": 12.5,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -752,7 +764,7 @@
           "is_async": false,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.08455745618498178,
+          "pagerank": 0.08455745618498181,
           "percent_total": 62.5,
           "percent_parent": 62.5,
           "n_plus_one_risk": false,
@@ -776,7 +788,7 @@
       "is_async": false,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.06464509715347132,
+      "pagerank": 0.06464509715347135,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

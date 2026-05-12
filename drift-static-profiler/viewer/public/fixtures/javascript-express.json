@@ -3,7 +3,8 @@
   "mode": "static",
   "generator": {
     "tool": "drift-static-profiler",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/javascript-express"
   },
   "summary": {
     "languages": [
@@ -105,7 +106,7 @@
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.17989761354389158
+        "score": 0.1798976135438916
       },
       {
         "name": "save",
@@ -133,38 +134,49 @@
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 8,
         "parent_class": "OrderRepository",
-        "score": 0.09196032350198471
+        "score": 0.0919603235019847
       },
       {
         "name": "notifyDownstream",
         "file": "tests/fixtures/javascript-express/src/routes.js",
         "line": 14,
         "parent_class": null,
-        "score": 0.09196032350198471
+        "score": 0.0919603235019847
       },
       {
         "name": "OrderService",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.09196032350198471
+        "score": 0.0919603235019847
       },
       {
         "name": "constructor",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 4,
         "parent_class": "OrderService",
-        "score": 0.09196032350198471
+        "score": 0.0919603235019847
       },
       {
         "name": "createOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 8,
         "parent_class": "OrderService",
-        "score": 0.09196032350198471
+        "score": 0.0919603235019847
       }
     ],
-    "recursive_symbols": []
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "JavaScript",
+        "bytes": 1798,
+        "files": 4,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "JavaScript",
+    "profiled_language_percent": 100.0
   },
   "entries": [
     {
@@ -204,7 +216,7 @@
       "is_async": true,
       "call_site_count": 0,
       "is_recursive": false,
-      "pagerank": 0.09196032350198471,
+      "pagerank": 0.0919603235019847,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

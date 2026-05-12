@@ -1,9 +1,11 @@
 use crate::categories::Category;
 use crate::graph::CallGraph;
+use crate::linguist::{LanguageBreakdownEntry, LanguageStats};
 use crate::tree::CallTreeNode;
 use crate::{FileTags, Language};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotPath {
@@ -26,6 +28,17 @@ pub struct Summary {
     pub dead_code: Vec<TopSymbol>,
     pub pagerank_top: Vec<RankedByScore>,
     pub recursive_symbols: Vec<TopSymbol>,
+    // ── Linguist-style language breakdown ──
+    /// Per-programming-language byte share of the whole repo (filtered by
+    /// the same .gitignore rules used for source discovery). Sorted desc by
+    /// bytes. Mirrors GitHub's repo-page language bar.
+    pub language_breakdown: Vec<LanguageBreakdownEntry>,
+    /// The supported language drift actually profiled — i.e. the
+    /// highest-byte language in `language_breakdown` that has a shipped
+    /// tree-sitter parser. `None` when no supported language was detected.
+    pub profiled_language: Option<String>,
+    /// Share of total programming bytes accounted for by `profiled_language`.
+    pub profiled_language_percent: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +63,8 @@ pub struct TopSymbol {
 pub struct Generator {
     pub tool: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,14 +81,17 @@ impl Report {
         all_tags: &[FileTags],
         graph: &CallGraph,
         entries: Vec<CallTreeNode>,
+        language_stats: &LanguageStats,
+        source_root: Option<&Path>,
     ) -> Self {
-        let summary = Summary::build(all_tags, graph, &entries);
+        let summary = Summary::build(all_tags, graph, &entries, language_stats);
         Self {
             schema_version: "1.0".into(),
             mode: "static".into(),
             generator: Generator {
                 tool: "drift-static-profiler".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
+                source_root: source_root.map(|p| p.display().to_string()),
             },
             summary,
             entries,
@@ -86,6 +104,7 @@ impl Summary {
         all_tags: &[FileTags],
         graph: &CallGraph,
         entries: &[CallTreeNode],
+        language_stats: &LanguageStats,
     ) -> Self {
         let languages: Vec<String> = {
             let mut s: HashSet<&'static str> = HashSet::new();
@@ -95,6 +114,9 @@ impl Summary {
                     Language::Java => "java",
                     Language::TypeScript => "typescript",
                     Language::JavaScript => "javascript",
+                    Language::Go => "go",
+                    Language::Rust => "rust",
+                    Language::Scala => "scala",
                 });
             }
             let mut v: Vec<String> = s.into_iter().map(|x| x.to_string()).collect();
@@ -270,6 +292,9 @@ impl Summary {
             dead_code,
             pagerank_top,
             recursive_symbols,
+            language_breakdown: language_stats.breakdown.clone(),
+            profiled_language: language_stats.dominant_supported_name.clone(),
+            profiled_language_percent: language_stats.dominant_supported_percent,
         }
     }
 }

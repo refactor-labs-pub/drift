@@ -3,7 +3,8 @@
   "mode": "static",
   "generator": {
     "tool": "drift-static-profiler",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/java-spring"
   },
   "summary": {
     "languages": [
@@ -169,7 +170,7 @@
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
         "line": 14,
         "parent_class": "OrderService",
-        "score": 0.06257919871635756
+        "score": 0.06257919871635759
       },
       {
         "name": "buildOrder",
@@ -190,52 +191,63 @@
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
         "line": 28,
         "parent_class": "Order",
-        "score": 0.05063514444709569
+        "score": 0.0506351444470957
       },
       {
         "name": "getTotalCents",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
         "line": 30,
         "parent_class": "Order",
-        "score": 0.05063514444709569
+        "score": 0.0506351444470957
       },
       {
         "name": "getCustomerEmail",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
         "line": 8,
         "parent_class": "OrderRequest",
-        "score": 0.05063514444709569
+        "score": 0.0506351444470957
       },
       {
         "name": "getTotalCents",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
         "line": 10,
         "parent_class": "OrderRequest",
-        "score": 0.05063514444709569
+        "score": 0.0506351444470957
       },
       {
         "name": "Order",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
         "line": 10,
         "parent_class": null,
-        "score": 0.03605504130885201
+        "score": 0.036055041308852016
       },
       {
         "name": "getCurrency",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
         "line": 32,
         "parent_class": "Order",
-        "score": 0.03605504130885201
+        "score": 0.036055041308852016
       },
       {
         "name": "setCurrency",
         "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
         "line": 33,
         "parent_class": "Order",
-        "score": 0.03605504130885201
+        "score": 0.036055041308852016
       }
     ],
-    "recursive_symbols": []
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "Java",
+        "bytes": 3989,
+        "files": 6,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "Java",
+    "profiled_language_percent": 100.0
   },
   "entries": [
     {
@@ -297,7 +309,7 @@
                   "is_async": false,
                   "call_site_count": 1,
                   "is_recursive": false,
-                  "pagerank": 0.03605504130885201,
+                  "pagerank": 0.036055041308852016,
                   "percent_total": 20.0,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -408,7 +420,7 @@
           "is_async": false,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.06257919871635756,
+          "pagerank": 0.06257919871635759,
           "percent_total": 80.0,
           "percent_parent": 80.0,
           "n_plus_one_risk": false,
@@ -432,7 +444,7 @@
       "is_async": false,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.03186214146801605,
+      "pagerank": 0.03186214146801606,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,
@@ -488,7 +500,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.03605504130885201,
+              "pagerank": 0.036055041308852016,
               "percent_total": 25.0,
               "percent_parent": 50.0,
               "n_plus_one_risk": false,
@@ -599,7 +611,7 @@
       "is_async": false,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.06257919871635756,
+      "pagerank": 0.06257919871635759,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

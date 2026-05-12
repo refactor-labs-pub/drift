@@ -7,16 +7,22 @@ import { SummaryBar } from './SummaryBar';
 import { HotPaths } from './HotPaths';
 import { Smells } from './Smells';
 import { Statistics } from './Statistics';
+import { RootsView } from './RootsView';
 import { subtreeWeight } from './transform';
 import { TIPS } from './tooltips';
 import { Help } from './Help';
 import type { CallTreeNode, Report } from './types';
 
 type FlameMode = 'kind' | 'category' | 'complexity' | 'smells';
-type BottomTab = 'tree' | 'hot' | 'smells' | 'stats';
+type BottomTab = 'tree' | 'roots' | 'hot' | 'smells' | 'stats';
 
 export function App() {
   const [fixtureKey, setFixtureKey] = useState(FIXTURES[0].key);
+  // Default to the Roots tab when the loaded report has many entries (the
+  // signature of `make scan-roots` output, where the entry dropdown alone
+  // would be unwieldy). Threshold matches "more than what a `make scan`
+  // produces" without forcing a schema field.
+  const ROOTS_TAB_THRESHOLD = 5;
   const [report, setReport] = useState<Report | null>(null);
   const [activeRootId, setActiveRootId] = useState<string | null>(null);
   const [selected, setSelected] = useState<CallTreeNode | null>(null);
@@ -28,6 +34,19 @@ export function App() {
 
   const fixture = FIXTURES.find(f => f.key === fixtureKey)!;
 
+  // For scan-fed fixtures (`roots` from `make scan-roots`, `custom` from
+  // `make scan`), replace the generic static label with the last path
+  // segment of whatever folder was actually scanned. Lets the user see
+  // ".../automation-enrichements" instead of "Root Profile (auto-discovered)".
+  const fixtureLabel = useMemo(() => {
+    const root = report?.generator?.source_root;
+    if (root && (fixtureKey === 'roots' || fixtureKey === 'custom')) {
+      const base = root.replace(/[/\\]+$/, '').split(/[/\\]/).pop();
+      if (base) return `.../${base}`;
+    }
+    return fixture.label;
+  }, [report, fixtureKey, fixture.label]);
+
   useEffect(() => {
     setError(null);
     setSelected(null);
@@ -38,6 +57,10 @@ export function App() {
         const sorted = [...data.entries].sort((a, b) => subtreeWeight(b) - subtreeWeight(a));
         setReport({ ...data, entries: sorted });
         setActiveRootId(sorted[0]?.id ?? null);
+        // Auto-switch to the Roots tab for multi-root scans (analyze-root output).
+        if (sorted.length >= ROOTS_TAB_THRESHOLD) {
+          setBottomTab('roots');
+        }
       })
       .catch(e => setError(String(e)));
   }, [fixture.json]);
@@ -103,6 +126,7 @@ export function App() {
       <Toolbar
         fixtureKey={fixtureKey}
         setFixtureKey={setFixtureKey}
+        fixtureLabel={fixtureLabel}
         roots={report?.entries ?? []}
         activeRootId={activeRootId}
         setActiveRootId={setActiveRootId}
@@ -163,6 +187,9 @@ export function App() {
           </div>
           <div style={tabsStyle}>
             <Tab active={bottomTab === 'tree'} onClick={() => setBottomTab('tree')}>Call Tree</Tab>
+            <Tab active={bottomTab === 'roots'} onClick={() => setBottomTab('roots')}>
+              Roots{report?.entries.length ? ` (${report.entries.length})` : ''}
+            </Tab>
             <Tab active={bottomTab === 'hot'} onClick={() => setBottomTab('hot')}>
               Hot Paths{report?.summary.hot_paths.length ? ` (${report.summary.hot_paths.length})` : ''}
             </Tab>
@@ -178,6 +205,13 @@ export function App() {
                 search={search}
                 selectedId={selected?.id ?? null}
                 onSelect={setSelected}
+              />
+            )}
+            {bottomTab === 'roots' && (
+              <RootsView
+                roots={report?.entries ?? []}
+                activeRootId={activeRootId}
+                onSelect={(id) => { setActiveRootId(id); setSelected(null); }}
               />
             )}
             {bottomTab === 'hot' && (
@@ -224,6 +258,7 @@ function findInTree(node: CallTreeNode, id: string): CallTreeNode | null {
 function Toolbar(props: {
   fixtureKey: string;
   setFixtureKey: (k: string) => void;
+  fixtureLabel: string;
   roots: CallTreeNode[];
   activeRootId: string | null;
   setActiveRootId: (id: string) => void;
@@ -233,13 +268,17 @@ function Toolbar(props: {
   setFlameMode: (m: FlameMode) => void;
   description: string;
 }) {
-  const { fixtureKey, setFixtureKey, roots, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
+  const { fixtureKey, setFixtureKey, fixtureLabel, roots, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
   return (
     <div style={toolbarStyle}>
       <div style={brandStyle}>drift · static profiler</div>
       <label style={labelStyle}>Fixture</label>
       <select value={fixtureKey} onChange={e => setFixtureKey(e.target.value)} style={selectStyle}>
-        {FIXTURES.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+        {FIXTURES.map(f => (
+          <option key={f.key} value={f.key}>
+            {f.key === fixtureKey ? fixtureLabel : f.label}
+          </option>
+        ))}
       </select>
       <label style={labelStyle}>Entry</label>
       <select

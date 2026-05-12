@@ -1,11 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use drift_static_profiler::{
-    graph::CallGraph,
-    report::Report,
-    tags::extract_tags,
-    tree::{render_ascii, TreeBuilder},
-    walker::discover_source_files,
+    analyze, analyze_roots, compute_language_stats, tags::extract_tags, tree::render_ascii,
+    walker::discover_source_files, AnalyzeOptions, DiscoverOpts, LanguageStats,
 };
 use std::path::PathBuf;
 
@@ -39,6 +36,85 @@ enum Cmd {
     Tags {
         path: PathBuf,
     },
+    /// Analyze any full path and write a JSON report directly into the viewer's
+    /// fixtures directory so it shows up at http://localhost:5180/.
+    ///
+    /// Example:
+    ///   drift-static-profiler scan /Users/me/code/myproj --entry handleRequest --name myproj
+    Scan {
+        /// Absolute or relative path to the project root to analyze
+        path: PathBuf,
+        /// Entry-point symbol name (repeatable). If omitted, the report will
+        /// still contain summary/graph data but no rooted call tree.
+        #[arg(short, long)]
+        entry: Vec<String>,
+        /// Fixture name (no extension). Defaults to "custom". The JSON is
+        /// written to `<out_dir>/<name>.json`.
+        #[arg(long, default_value = "custom")]
+        name: String,
+        /// Output directory. Defaults to the viewer's public/fixtures folder
+        /// relative to the current working directory.
+        #[arg(long, default_value = "viewer/public/fixtures")]
+        out_dir: PathBuf,
+        /// Max tree depth (default 12)
+        #[arg(long, default_value_t = 12)]
+        max_depth: usize,
+        /// Hide trivial getX/setX/isX accessors in the tree
+        #[arg(long)]
+        no_accessors: bool,
+        /// Also print the ASCII call tree to stdout
+        #[arg(long)]
+        print: bool,
+    },
+    /// Auto-discover every plausible root entry point in a project (symbols
+    /// with no in-graph caller, ranked by transitive reach) and emit a single
+    /// JSON report containing the call tree of each one. The viewer's "Roots"
+    /// tab renders this as a sortable table; clicking a row drills into that
+    /// entry's flame graph and call tree (same drill-in pattern as Chrome
+    /// DevTools' Top-Down view, pprof's `top -cum`, or Speedscope's Sandwich).
+    ///
+    /// Example:
+    ///   drift-static-profiler analyze-root /Users/me/code/myproj --name myproj-roots
+    AnalyzeRoot {
+        /// Absolute or relative path to the project root to analyze
+        path: PathBuf,
+        /// Fixture name (no extension). Defaults to "roots".
+        #[arg(long, default_value = "roots")]
+        name: String,
+        /// Output directory. Defaults to the viewer's public/fixtures folder
+        /// relative to the current working directory.
+        #[arg(long, default_value = "viewer/public/fixtures")]
+        out_dir: PathBuf,
+        /// Minimum transitive reach (deduped subtree size) for a symbol to
+        /// qualify as a root worth profiling. Default 2 drops leaves with no
+        /// in-project callees; raise it to focus on top-level handlers.
+        #[arg(long, default_value_t = 2)]
+        min_reach: usize,
+        /// Hard cap on number of discovered roots. Default 200 — generous but
+        /// bounded so the viewer doesn't choke on a monorepo.
+        #[arg(long, default_value_t = 200)]
+        max_roots: usize,
+        /// Include symbols under test/spec paths (off by default).
+        #[arg(long)]
+        include_tests: bool,
+        /// Include language-conventional private symbols (`_foo`, off by default).
+        #[arg(long)]
+        include_private: bool,
+        /// Include trivial accessors (`getX`/`setX`/`isX`, off by default).
+        #[arg(long)]
+        include_accessors: bool,
+        /// Max tree depth per root (default 12)
+        #[arg(long, default_value_t = 12)]
+        max_depth: usize,
+        /// Hide accessor frames inside the per-root tree (mirrors `analyze`
+        /// flag). Independent from `--include-accessors`, which controls the
+        /// roots-list filter.
+        #[arg(long)]
+        no_accessors: bool,
+        /// Also print the discovered roots table to stderr
+        #[arg(long)]
+        print: bool,
+    },
     /// Compare two report JSONs (baseline vs current). Exit non-zero if regressions found.
     Diff {
         baseline: PathBuf,
@@ -69,6 +145,40 @@ fn main() -> Result<()> {
             json,
             no_fail,
         } => run_diff(&baseline, &current, json, no_fail),
+        Cmd::Scan {
+            path,
+            entry,
+            name,
+            out_dir,
+            max_depth,
+            no_accessors,
+            print,
+        } => run_scan(&path, &entry, &name, &out_dir, max_depth, no_accessors, print),
+        Cmd::AnalyzeRoot {
+            path,
+            name,
+            out_dir,
+            min_reach,
+            max_roots,
+            include_tests,
+            include_private,
+            include_accessors,
+            max_depth,
+            no_accessors,
+            print,
+        } => run_analyze_root(
+            &path,
+            &name,
+            &out_dir,
+            min_reach,
+            max_roots,
+            include_tests,
+            include_private,
+            include_accessors,
+            max_depth,
+            no_accessors,
+            print,
+        ),
     }
 }
 
@@ -111,50 +221,160 @@ fn run_analyze(
     max_depth: usize,
     no_accessors: bool,
 ) -> Result<()> {
-    let files = discover_source_files(root);
-    let mut all = Vec::with_capacity(files.len());
-    for (file, lang) in files {
-        match extract_tags(&file, lang) {
-            Ok(tags) => all.push(tags),
-            Err(e) => eprintln!("warn: failed to parse {}: {e:#}", file.display()),
-        }
-    }
-    let graph = CallGraph::build(&all);
-    let mut builder = TreeBuilder::new(&graph, root);
-    builder.max_depth = max_depth;
-    builder.skip_accessors = no_accessors;
-
     if entries.is_empty() {
         eprintln!("note: no --entry given; pass one or more entry-point symbol names");
         return Ok(());
     }
 
-    let mut roots = Vec::new();
-    for q in entries {
-        let ids = graph.find_entry_points(q);
-        if ids.is_empty() {
-            eprintln!("warn: no symbol matched entry {q:?}");
-        }
-        for id in ids {
-            if let Some(node) = builder.build(&id) {
-                roots.push(node);
-            }
-        }
+    let outcome = analyze(
+        root,
+        entries,
+        &AnalyzeOptions {
+            max_depth,
+            skip_accessors: no_accessors,
+        },
+    )?;
+    print_language_summary(&outcome.language_stats);
+    for q in &outcome.unresolved_entries {
+        eprintln!("warn: no symbol matched entry {q:?}");
     }
 
     if json {
-        let report = Report::build(&all, &graph, roots);
-        println!("{}", serde_json::to_string_pretty(&report).context("serialize")?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&outcome.report).context("serialize")?
+        );
     } else {
-        for r in &roots {
+        for r in &outcome.report.entries {
             println!("{}", render_ascii(r));
         }
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_scan(
+    root: &std::path::Path,
+    entries: &[String],
+    name: &str,
+    out_dir: &std::path::Path,
+    max_depth: usize,
+    no_accessors: bool,
+    print: bool,
+) -> Result<()> {
+    let outcome = analyze(
+        root,
+        entries,
+        &AnalyzeOptions {
+            max_depth,
+            skip_accessors: no_accessors,
+        },
+    )?;
+    print_language_summary(&outcome.language_stats);
+    for q in &outcome.unresolved_entries {
+        eprintln!("warn: no symbol matched entry {q:?}");
+    }
+
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("create output dir {}", out_dir.display()))?;
+    let out_path = out_dir.join(format!("{name}.json"));
+    let json = serde_json::to_string_pretty(&outcome.report).context("serialize")?;
+    std::fs::write(&out_path, &json)
+        .with_context(|| format!("write report to {}", out_path.display()))?;
+
+    eprintln!(
+        "✓ wrote {} ({} entries, {} symbols)",
+        out_path.display(),
+        outcome.report.entries.len(),
+        outcome.report.summary.symbols,
+    );
+    eprintln!(
+        "  open the viewer (make viewer) and pick the fixture named '{name}' to see it",
+    );
+
+    if print {
+        for r in &outcome.report.entries {
+            println!("{}", render_ascii(r));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_analyze_root(
+    root: &std::path::Path,
+    name: &str,
+    out_dir: &std::path::Path,
+    min_reach: usize,
+    max_roots: usize,
+    include_tests: bool,
+    include_private: bool,
+    include_accessors: bool,
+    max_depth: usize,
+    no_accessors: bool,
+    print: bool,
+) -> Result<()> {
+    let discover = DiscoverOpts {
+        min_reach,
+        skip_tests: !include_tests,
+        skip_private: !include_private,
+        skip_accessors: !include_accessors,
+        max_roots,
+    };
+    let outcome = analyze_roots(
+        root,
+        &discover,
+        &AnalyzeOptions {
+            max_depth,
+            skip_accessors: no_accessors,
+        },
+    )?;
+    print_language_summary(&outcome.language_stats);
+
+    eprintln!(
+        "discovered {} root entry points (min_reach={min_reach}, max_roots={max_roots})",
+        outcome.discovered_roots.len(),
+    );
+
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("create output dir {}", out_dir.display()))?;
+    let out_path = out_dir.join(format!("{name}.json"));
+    let json = serde_json::to_string_pretty(&outcome.report).context("serialize")?;
+    std::fs::write(&out_path, &json)
+        .with_context(|| format!("write report to {}", out_path.display()))?;
+
+    eprintln!(
+        "✓ wrote {} ({} entries, {} symbols)",
+        out_path.display(),
+        outcome.report.entries.len(),
+        outcome.report.summary.symbols,
+    );
+    eprintln!(
+        "  open the viewer (make viewer) and pick the fixture named '{name}' to see it",
+    );
+
+    if print {
+        eprintln!("\ntop roots (ranked by reach):");
+        for (i, r) in outcome.discovered_roots.iter().take(20).enumerate() {
+            eprintln!("  {:>3}. {:<32} reach={}", i + 1, r.name, r.reach);
+        }
+    }
+    Ok(())
+}
+
 fn run_tags(root: &std::path::Path) -> Result<()> {
-    let files = discover_source_files(root);
+    let stats = compute_language_stats(root);
+    print_language_summary(&stats);
+    let files: Vec<_> = match stats.dominant_supported {
+        Some(target) => discover_source_files(root)
+            .into_iter()
+            .filter(|(_, l)| *l == target)
+            .collect(),
+        None => {
+            eprintln!("note: no supported language detected; nothing to tag");
+            return Ok(());
+        }
+    };
     for (file, lang) in files {
         match extract_tags(&file, lang) {
             Ok(tags) => {
@@ -187,4 +407,35 @@ fn run_tags(root: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Render a GitHub-style language bar and announce which supported language
+/// drift will profile. Goes to stderr so it doesn't contaminate `--json`
+/// output on stdout.
+fn print_language_summary(stats: &LanguageStats) {
+    if stats.breakdown.is_empty() {
+        eprintln!("languages: (no programming files detected)");
+        return;
+    }
+    let top: Vec<String> = stats
+        .breakdown
+        .iter()
+        .take(6)
+        .map(|e| {
+            let marker = if e.supported { "*" } else { "" };
+            format!("{}{} {:.1}%", e.language, marker, e.percent)
+        })
+        .collect();
+    eprintln!(
+        "languages: {}  ({} files, {} bytes)",
+        top.join(", "),
+        stats.total_files,
+        stats.total_bytes,
+    );
+    match (&stats.dominant_supported_name, stats.dominant_supported_percent) {
+        (Some(name), Some(pct)) => {
+            eprintln!("profiling: {name} ({pct:.1}% of code) — marked with *")
+        }
+        _ => eprintln!("profiling: (no supported language present)"),
+    }
 }

@@ -1,0 +1,668 @@
+{
+  "schema_version": "1.0",
+  "mode": "static",
+  "generator": {
+    "tool": "drift-static-profiler",
+    "version": "0.1.0",
+    "source_root": "tests/fixtures/scala-play"
+  },
+  "summary": {
+    "languages": [
+      "scala"
+    ],
+    "files": 3,
+    "symbols": 11,
+    "edges": 6,
+    "categories": {
+      "cache": 0,
+      "compute": 0,
+      "db": 4,
+      "io": 0,
+      "log": 0,
+      "network": 0,
+      "queue": 0
+    },
+    "top_callers": [
+      {
+        "name": "Order",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 6,
+        "parent_class": null,
+        "count": 2
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 14,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 8,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 10,
+        "parent_class": "OrdersRepository",
+        "count": 1
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 18,
+        "parent_class": "OrdersService",
+        "count": 1
+      }
+    ],
+    "top_callees": [
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 8,
+        "parent_class": "OrdersService",
+        "count": 3
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 14,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/scala-play/app/controllers/OrdersController.scala",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "count": 1
+      },
+      {
+        "name": "findById",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 16,
+        "parent_class": "OrdersRepository",
+        "count": 1
+      }
+    ],
+    "hot_paths": [
+      {
+        "frames": [
+          "OrdersController.createOrder",
+          "OrdersService.createOrder",
+          "OrdersRepository.save"
+        ],
+        "depth": 2,
+        "terminal_category": "db"
+      },
+      {
+        "frames": [
+          "OrdersService.createOrder",
+          "OrdersRepository.save"
+        ],
+        "depth": 1,
+        "terminal_category": "db"
+      }
+    ],
+    "dead_code": [
+      {
+        "name": "findById",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 16,
+        "parent_class": "OrdersRepository",
+        "count": 0
+      }
+    ],
+    "pagerank_top": [
+      {
+        "name": "Order",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 6,
+        "parent_class": null,
+        "score": 0.2122636601097865
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 8,
+        "parent_class": "OrdersService",
+        "score": 0.1201899660901432
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 10,
+        "parent_class": "OrdersRepository",
+        "score": 0.0983587359087693
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 14,
+        "parent_class": "OrdersService",
+        "score": 0.0983587359087693
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/scala-play/app/services/OrdersService.scala",
+        "line": 18,
+        "parent_class": "OrdersService",
+        "score": 0.0983587359087693
+      },
+      {
+        "name": "CreateOrderDto",
+        "file": "tests/fixtures/scala-play/app/controllers/OrdersController.scala",
+        "line": 6,
+        "parent_class": null,
+        "score": 0.06207836101229377
+      },
+      {
+        "name": "OrdersController",
+        "file": "tests/fixtures/scala-play/app/controllers/OrdersController.scala",
+        "line": 8,
+        "parent_class": null,
+        "score": 0.06207836101229377
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/scala-play/app/controllers/OrdersController.scala",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "score": 0.06207836101229377
+      },
+      {
+        "name": "OrdersRepository",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 8,
+        "parent_class": null,
+        "score": 0.06207836101229377
+      },
+      {
+        "name": "findById",
+        "file": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala",
+        "line": 16,
+        "parent_class": "OrdersRepository",
+        "score": 0.06207836101229377
+      }
+    ],
+    "recursive_symbols": [],
+    "language_breakdown": [
+      {
+        "language": "Scala",
+        "bytes": 2086,
+        "files": 3,
+        "percent": 100.0,
+        "supported": true
+      }
+    ],
+    "profiled_language": "Scala",
+    "profiled_language_percent": 100.0
+  },
+  "entries": [
+    {
+      "id": "tests/fixtures/scala-play/app/controllers/OrdersController.scala::OrdersController::createOrder",
+      "name": "createOrder",
+      "kind": "Function",
+      "file": "app/controllers/OrdersController.scala",
+      "line": 10,
+      "depth": 0,
+      "parent_class": "OrdersController",
+      "children": [
+        {
+          "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+          "name": "createOrder",
+          "kind": "Function",
+          "file": "app/services/OrdersService.scala",
+          "line": 8,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [
+            {
+              "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::buildOrder",
+              "name": "buildOrder",
+              "kind": "Function",
+              "file": "app/services/OrdersService.scala",
+              "line": 14,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [
+                {
+                  "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::::Order",
+                  "name": "Order",
+                  "kind": "Class",
+                  "file": "app/repos/OrdersRepository.scala",
+                  "line": 6,
+                  "depth": 3,
+                  "parent_class": null,
+                  "children": [],
+                  "truncated_reason": null,
+                  "callers": [
+                    {
+                      "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::OrdersRepository::findById",
+                      "name": "findById",
+                      "file": "app/repos/OrdersRepository.scala",
+                      "line": 16,
+                      "parent_class": "OrdersRepository"
+                    },
+                    {
+                      "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::buildOrder",
+                      "name": "buildOrder",
+                      "file": "app/services/OrdersService.scala",
+                      "line": 14,
+                      "parent_class": "OrdersService"
+                    }
+                  ],
+                  "callers_count": 2,
+                  "callees_count": 0,
+                  "subtree_size": 1,
+                  "category_self": null,
+                  "categories_reached": {},
+                  "external_calls": [],
+                  "complexity": 0,
+                  "loc": 0,
+                  "nesting_depth": 0,
+                  "parameter_count": 0,
+                  "is_async": false,
+                  "call_site_count": 2,
+                  "is_recursive": false,
+                  "pagerank": 0.2122636601097865,
+                  "percent_total": 16.666666666666664,
+                  "percent_parent": 50.0,
+                  "n_plus_one_risk": false,
+                  "blocking_in_async": false
+                }
+              ],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "app/services/OrdersService.scala",
+                  "line": 8,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 1,
+              "subtree_size": 2,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 1,
+              "loc": 3,
+              "nesting_depth": 0,
+              "parameter_count": 3,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.0983587359087693,
+              "percent_total": 33.33333333333333,
+              "percent_parent": 40.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::validate",
+              "name": "validate",
+              "kind": "Function",
+              "file": "app/services/OrdersService.scala",
+              "line": 18,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "app/services/OrdersService.scala",
+                  "line": 8,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 3,
+              "loc": 8,
+              "nesting_depth": 1,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.0983587359087693,
+              "percent_total": 16.666666666666664,
+              "percent_parent": 20.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::OrdersRepository::save",
+              "name": "save",
+              "kind": "Function",
+              "file": "app/repos/OrdersRepository.scala",
+              "line": 10,
+              "depth": 2,
+              "parent_class": "OrdersRepository",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "app/services/OrdersService.scala",
+                  "line": 8,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": "db",
+              "categories_reached": {
+                "db": 2
+              },
+              "external_calls": [
+                {
+                  "name": "run",
+                  "receiver": "db",
+                  "category": "db",
+                  "tier": "receiver_pattern",
+                  "evidence": "receiver name `db` matches db pattern",
+                  "line": 13,
+                  "in_loop": false,
+                  "in_await": false
+                }
+              ],
+              "complexity": 1,
+              "loc": 5,
+              "nesting_depth": 0,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.0983587359087693,
+              "percent_total": 16.666666666666664,
+              "percent_parent": 20.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/scala-play/app/controllers/OrdersController.scala::OrdersController::createOrder",
+              "name": "createOrder",
+              "file": "app/controllers/OrdersController.scala",
+              "line": 10,
+              "parent_class": "OrdersController"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 3,
+          "subtree_size": 5,
+          "category_self": null,
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 5,
+          "nesting_depth": 0,
+          "parameter_count": 3,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.1201899660901432,
+          "percent_total": 83.33333333333334,
+          "percent_parent": 83.33333333333334,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [],
+      "callers_count": 0,
+      "callees_count": 1,
+      "subtree_size": 6,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 3,
+      "nesting_depth": 0,
+      "parameter_count": 1,
+      "is_async": false,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.06207836101229377,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    },
+    {
+      "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+      "name": "createOrder",
+      "kind": "Function",
+      "file": "app/services/OrdersService.scala",
+      "line": 8,
+      "depth": 0,
+      "parent_class": "OrdersService",
+      "children": [
+        {
+          "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::buildOrder",
+          "name": "buildOrder",
+          "kind": "Function",
+          "file": "app/services/OrdersService.scala",
+          "line": 14,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [
+            {
+              "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::::Order",
+              "name": "Order",
+              "kind": "Class",
+              "file": "app/repos/OrdersRepository.scala",
+              "line": 6,
+              "depth": 2,
+              "parent_class": null,
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::OrdersRepository::findById",
+                  "name": "findById",
+                  "file": "app/repos/OrdersRepository.scala",
+                  "line": 16,
+                  "parent_class": "OrdersRepository"
+                },
+                {
+                  "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::buildOrder",
+                  "name": "buildOrder",
+                  "file": "app/services/OrdersService.scala",
+                  "line": 14,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 2,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 0,
+              "loc": 0,
+              "nesting_depth": 0,
+              "parameter_count": 0,
+              "is_async": false,
+              "call_site_count": 2,
+              "is_recursive": false,
+              "pagerank": 0.2122636601097865,
+              "percent_total": 20.0,
+              "percent_parent": 50.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+              "name": "createOrder",
+              "file": "app/services/OrdersService.scala",
+              "line": 8,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 1,
+          "subtree_size": 2,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 3,
+          "nesting_depth": 0,
+          "parameter_count": 3,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.0983587359087693,
+          "percent_total": 40.0,
+          "percent_parent": 40.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::validate",
+          "name": "validate",
+          "kind": "Function",
+          "file": "app/services/OrdersService.scala",
+          "line": 18,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+              "name": "createOrder",
+              "file": "app/services/OrdersService.scala",
+              "line": 8,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 3,
+          "loc": 8,
+          "nesting_depth": 1,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.0983587359087693,
+          "percent_total": 20.0,
+          "percent_parent": 20.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/scala-play/app/repos/OrdersRepository.scala::OrdersRepository::save",
+          "name": "save",
+          "kind": "Function",
+          "file": "app/repos/OrdersRepository.scala",
+          "line": 10,
+          "depth": 1,
+          "parent_class": "OrdersRepository",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/scala-play/app/services/OrdersService.scala::OrdersService::createOrder",
+              "name": "createOrder",
+              "file": "app/services/OrdersService.scala",
+              "line": 8,
+              "parent_class": "OrdersService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 0,
+          "subtree_size": 1,
+          "category_self": "db",
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [
+            {
+              "name": "run",
+              "receiver": "db",
+              "category": "db",
+              "tier": "receiver_pattern",
+              "evidence": "receiver name `db` matches db pattern",
+              "line": 13,
+              "in_loop": false,
+              "in_await": false
+            }
+          ],
+          "complexity": 1,
+          "loc": 5,
+          "nesting_depth": 0,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.0983587359087693,
+          "percent_total": 20.0,
+          "percent_parent": 20.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [
+        {
+          "id": "tests/fixtures/scala-play/app/controllers/OrdersController.scala::OrdersController::createOrder",
+          "name": "createOrder",
+          "file": "app/controllers/OrdersController.scala",
+          "line": 10,
+          "parent_class": "OrdersController"
+        }
+      ],
+      "callers_count": 1,
+      "callees_count": 3,
+      "subtree_size": 5,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 5,
+      "nesting_depth": 0,
+      "parameter_count": 3,
+      "is_async": false,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.1201899660901432,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    }
+  ]
+}
