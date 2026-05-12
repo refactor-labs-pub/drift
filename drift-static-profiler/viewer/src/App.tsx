@@ -32,6 +32,7 @@ export function App() {
   const [flameMode, setFlameMode] = useState<FlameMode>('kind');
   const [bottomTab, setBottomTab] = useState<BottomTab>('tree');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [flameZoomKey, setFlameZoomKey] = useState(0);
 
   // Layout sizes — persisted to localStorage, dragged via Splitter components.
   // Defaults match the prior hard-coded grid (`1fr 340px` body, even vertical split).
@@ -70,8 +71,12 @@ export function App() {
     fetch(fixture.json, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((data: Report) => {
-        // Sort entry points by subtree size, biggest first.
-        const sorted = [...data.entries].sort((a, b) => subtreeWeight(b) - subtreeWeight(a));
+        // Sort entry points alphabetically by display name.
+        const sorted = [...data.entries].sort((a, b) => {
+          const aName = (a.parent_class ? `${a.parent_class}.` : '') + a.name;
+          const bName = (b.parent_class ? `${b.parent_class}.` : '') + b.name;
+          return aName.localeCompare(bName);
+        });
         setReport({ ...data, entries: sorted });
         setActiveRootId(sorted[0]?.id ?? null);
         // Auto-switch to the Roots tab for multi-root scans (analyze-root output).
@@ -193,8 +198,15 @@ export function App() {
                 <button onClick={() => setCategoryFilter(null)} style={chipCloseStyle} title="Clear the category filter (show all frames at full opacity).">×</button>
               </span>
             )}
+            <button
+              onClick={() => setFlameZoomKey(k => k + 1)}
+              style={resetBtnStyle}
+              title="Reset zoom to full flame graph (click any frame to zoom in again)"
+            >
+              ↺ zoom
+            </button>
             {selected && (
-              <button onClick={() => setSelected(activeRoot)} style={resetBtnStyle} title={TIPS.toolbar_back_to_root}>
+              <button onClick={() => { setSelected(activeRoot); setFlameZoomKey(k => k + 1); }} style={{ ...resetBtnStyle, marginLeft: 4 }} title={TIPS.toolbar_back_to_root}>
                 ← back to root
               </button>
             )}
@@ -203,6 +215,7 @@ export function App() {
             {error && <div style={errorStyle}>load error: {error}</div>}
             {!error && activeRoot && (
               <FlameView
+                key={`${activeRootId ?? ''}-${flameZoomKey}`}
                 root={activeRoot}
                 search={search}
                 mode={flameMode}
@@ -319,6 +332,24 @@ function Toolbar(props: {
   description: string;
 }) {
   const { fixtureKey, setFixtureKey, fixtureLabel, roots, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
+
+  // Filter entry dropdown by search so the user can type to narrow 55+ entries.
+  // Always include the active root so the select value stays valid.
+  const filteredRoots = useMemo(() => {
+    if (!search) return roots;
+    const q = search.toLowerCase();
+    const matched = roots.filter(r => {
+      const name = (r.parent_class ? `${r.parent_class}.` : '') + r.name;
+      return name.toLowerCase().includes(q) || r.file.toLowerCase().includes(q);
+    });
+    // Ensure the active selection is always present in the list.
+    if (activeRootId && !matched.find(r => r.id === activeRootId)) {
+      const active = roots.find(r => r.id === activeRootId);
+      if (active) matched.unshift(active);
+    }
+    return matched;
+  }, [roots, search, activeRootId]);
+
   return (
     <div style={toolbarStyle}>
       <div style={brandStyle}>
@@ -348,7 +379,7 @@ function Toolbar(props: {
         style={{ ...selectStyle, minWidth: 280 }}
         title={TIPS.toolbar_entry}
       >
-        {roots.map(r => (
+        {filteredRoots.map(r => (
           <option key={r.id} value={r.id}>
             {(r.parent_class ? `${r.parent_class}.` : '') + r.name} — {r.file}:{r.line}
           </option>
