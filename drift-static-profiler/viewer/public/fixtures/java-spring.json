@@ -1,0 +1,609 @@
+{
+  "schema_version": "1.0",
+  "mode": "static",
+  "generator": {
+    "tool": "drift-static-profiler",
+    "version": "0.1.0"
+  },
+  "summary": {
+    "languages": [
+      "java"
+    ],
+    "files": 6,
+    "symbols": 25,
+    "edges": 20,
+    "categories": {
+      "cache": 0,
+      "compute": 0,
+      "db": 4,
+      "io": 0,
+      "log": 0,
+      "network": 0,
+      "queue": 0
+    },
+    "top_callers": [
+      {
+        "name": "getCustomerEmail",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 28,
+        "parent_class": "Order",
+        "count": 2
+      },
+      {
+        "name": "getCustomerEmail",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
+        "line": 8,
+        "parent_class": "OrderRequest",
+        "count": 2
+      },
+      {
+        "name": "getTotalCents",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 30,
+        "parent_class": "Order",
+        "count": 2
+      },
+      {
+        "name": "getTotalCents",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
+        "line": 10,
+        "parent_class": "OrderRequest",
+        "count": 2
+      },
+      {
+        "name": "Order",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 10,
+        "parent_class": null,
+        "count": 1
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 20,
+        "parent_class": "OrderService",
+        "count": 1
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 14,
+        "parent_class": "OrderService",
+        "count": 1
+      },
+      {
+        "name": "getCurrency",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 32,
+        "parent_class": "Order",
+        "count": 1
+      },
+      {
+        "name": "getCurrency",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
+        "line": 12,
+        "parent_class": "OrderRequest",
+        "count": 1
+      },
+      {
+        "name": "setCurrency",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 33,
+        "parent_class": "Order",
+        "count": 1
+      }
+    ],
+    "top_callees": [
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 20,
+        "parent_class": "OrderService",
+        "count": 13
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 30,
+        "parent_class": "OrderService",
+        "count": 4
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 14,
+        "parent_class": "OrderService",
+        "count": 2
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderController.java",
+        "line": 19,
+        "parent_class": "OrderController",
+        "count": 1
+      }
+    ],
+    "hot_paths": [
+      {
+        "frames": [
+          "OrderController.createOrder",
+          "OrderService.createOrder"
+        ],
+        "depth": 1,
+        "terminal_category": "db"
+      },
+      {
+        "frames": [
+          "OrderService.createOrder"
+        ],
+        "depth": 0,
+        "terminal_category": "db"
+      }
+    ],
+    "dead_code": [
+      {
+        "name": "getId",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 26,
+        "parent_class": "Order",
+        "count": 0
+      },
+      {
+        "name": "setId",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 27,
+        "parent_class": "Order",
+        "count": 0
+      },
+      {
+        "name": "main",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrdersApplication.java",
+        "line": 8,
+        "parent_class": "OrdersApplication",
+        "count": 0
+      }
+    ],
+    "pagerank_top": [
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 14,
+        "parent_class": "OrderService",
+        "score": 0.06257919871635756
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 20,
+        "parent_class": "OrderService",
+        "score": 0.06181278925172345
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java",
+        "line": 30,
+        "parent_class": "OrderService",
+        "score": 0.06181278925172345
+      },
+      {
+        "name": "getCustomerEmail",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 28,
+        "parent_class": "Order",
+        "score": 0.05063514444709569
+      },
+      {
+        "name": "getTotalCents",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 30,
+        "parent_class": "Order",
+        "score": 0.05063514444709569
+      },
+      {
+        "name": "getCustomerEmail",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
+        "line": 8,
+        "parent_class": "OrderRequest",
+        "score": 0.05063514444709569
+      },
+      {
+        "name": "getTotalCents",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderRequest.java",
+        "line": 10,
+        "parent_class": "OrderRequest",
+        "score": 0.05063514444709569
+      },
+      {
+        "name": "Order",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 10,
+        "parent_class": null,
+        "score": 0.03605504130885201
+      },
+      {
+        "name": "getCurrency",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 32,
+        "parent_class": "Order",
+        "score": 0.03605504130885201
+      },
+      {
+        "name": "setCurrency",
+        "file": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java",
+        "line": 33,
+        "parent_class": "Order",
+        "score": 0.03605504130885201
+      }
+    ],
+    "recursive_symbols": []
+  },
+  "entries": [
+    {
+      "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderController.java::OrderController::createOrder",
+      "name": "createOrder",
+      "kind": "Method",
+      "file": "src/main/java/com/example/orders/OrderController.java",
+      "line": 19,
+      "depth": 0,
+      "parent_class": "OrderController",
+      "children": [
+        {
+          "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+          "name": "createOrder",
+          "kind": "Method",
+          "file": "src/main/java/com/example/orders/OrderService.java",
+          "line": 14,
+          "depth": 1,
+          "parent_class": "OrderService",
+          "children": [
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::buildOrder",
+              "name": "buildOrder",
+              "kind": "Method",
+              "file": "src/main/java/com/example/orders/OrderService.java",
+              "line": 20,
+              "depth": 2,
+              "parent_class": "OrderService",
+              "children": [
+                {
+                  "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java::::Order",
+                  "name": "Order",
+                  "kind": "Class",
+                  "file": "src/main/java/com/example/orders/Order.java",
+                  "line": 10,
+                  "depth": 3,
+                  "parent_class": null,
+                  "children": [],
+                  "truncated_reason": null,
+                  "callers": [
+                    {
+                      "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::buildOrder",
+                      "name": "buildOrder",
+                      "file": "src/main/java/com/example/orders/OrderService.java",
+                      "line": 20,
+                      "parent_class": "OrderService"
+                    }
+                  ],
+                  "callers_count": 1,
+                  "callees_count": 0,
+                  "subtree_size": 1,
+                  "category_self": null,
+                  "categories_reached": {},
+                  "external_calls": [],
+                  "complexity": 0,
+                  "loc": 0,
+                  "nesting_depth": 0,
+                  "parameter_count": 0,
+                  "is_async": false,
+                  "call_site_count": 1,
+                  "is_recursive": false,
+                  "pagerank": 0.03605504130885201,
+                  "percent_total": 20.0,
+                  "percent_parent": 50.0,
+                  "n_plus_one_risk": false,
+                  "blocking_in_async": false
+                }
+              ],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+                  "name": "createOrder",
+                  "file": "src/main/java/com/example/orders/OrderService.java",
+                  "line": 14,
+                  "parent_class": "OrderService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 13,
+              "subtree_size": 2,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 2,
+              "loc": 9,
+              "nesting_depth": 1,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.06181278925172345,
+              "percent_total": 40.0,
+              "percent_parent": 50.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::validate",
+              "name": "validate",
+              "kind": "Method",
+              "file": "src/main/java/com/example/orders/OrderService.java",
+              "line": 30,
+              "depth": 2,
+              "parent_class": "OrderService",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+                  "name": "createOrder",
+                  "file": "src/main/java/com/example/orders/OrderService.java",
+                  "line": 14,
+                  "parent_class": "OrderService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 4,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 5,
+              "loc": 8,
+              "nesting_depth": 1,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.06181278925172345,
+              "percent_total": 20.0,
+              "percent_parent": 25.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderController.java::OrderController::createOrder",
+              "name": "createOrder",
+              "file": "src/main/java/com/example/orders/OrderController.java",
+              "line": 19,
+              "parent_class": "OrderController"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 2,
+          "subtree_size": 4,
+          "category_self": "db",
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [
+            {
+              "name": "save",
+              "receiver": "repository",
+              "category": "db",
+              "tier": "receiver_pattern",
+              "evidence": "receiver name `repository` matches db pattern",
+              "line": 17,
+              "in_loop": false,
+              "in_await": false
+            }
+          ],
+          "complexity": 1,
+          "loc": 5,
+          "nesting_depth": 0,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.06257919871635756,
+          "percent_total": 80.0,
+          "percent_parent": 80.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [],
+      "callers_count": 0,
+      "callees_count": 1,
+      "subtree_size": 5,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 4,
+      "nesting_depth": 0,
+      "parameter_count": 1,
+      "is_async": false,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.03186214146801605,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    },
+    {
+      "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+      "name": "createOrder",
+      "kind": "Method",
+      "file": "src/main/java/com/example/orders/OrderService.java",
+      "line": 14,
+      "depth": 0,
+      "parent_class": "OrderService",
+      "children": [
+        {
+          "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::buildOrder",
+          "name": "buildOrder",
+          "kind": "Method",
+          "file": "src/main/java/com/example/orders/OrderService.java",
+          "line": 20,
+          "depth": 1,
+          "parent_class": "OrderService",
+          "children": [
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/Order.java::::Order",
+              "name": "Order",
+              "kind": "Class",
+              "file": "src/main/java/com/example/orders/Order.java",
+              "line": 10,
+              "depth": 2,
+              "parent_class": null,
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::buildOrder",
+                  "name": "buildOrder",
+                  "file": "src/main/java/com/example/orders/OrderService.java",
+                  "line": 20,
+                  "parent_class": "OrderService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 0,
+              "loc": 0,
+              "nesting_depth": 0,
+              "parameter_count": 0,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.03605504130885201,
+              "percent_total": 25.0,
+              "percent_parent": 50.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+              "name": "createOrder",
+              "file": "src/main/java/com/example/orders/OrderService.java",
+              "line": 14,
+              "parent_class": "OrderService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 13,
+          "subtree_size": 2,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 2,
+          "loc": 9,
+          "nesting_depth": 1,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.06181278925172345,
+          "percent_total": 50.0,
+          "percent_parent": 50.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        },
+        {
+          "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::validate",
+          "name": "validate",
+          "kind": "Method",
+          "file": "src/main/java/com/example/orders/OrderService.java",
+          "line": 30,
+          "depth": 1,
+          "parent_class": "OrderService",
+          "children": [],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderService.java::OrderService::createOrder",
+              "name": "createOrder",
+              "file": "src/main/java/com/example/orders/OrderService.java",
+              "line": 14,
+              "parent_class": "OrderService"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 4,
+          "subtree_size": 1,
+          "category_self": null,
+          "categories_reached": {},
+          "external_calls": [],
+          "complexity": 5,
+          "loc": 8,
+          "nesting_depth": 1,
+          "parameter_count": 1,
+          "is_async": false,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.06181278925172345,
+          "percent_total": 25.0,
+          "percent_parent": 25.0,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [
+        {
+          "id": "tests/fixtures/java-spring/src/main/java/com/example/orders/OrderController.java::OrderController::createOrder",
+          "name": "createOrder",
+          "file": "src/main/java/com/example/orders/OrderController.java",
+          "line": 19,
+          "parent_class": "OrderController"
+        }
+      ],
+      "callers_count": 1,
+      "callees_count": 2,
+      "subtree_size": 4,
+      "category_self": "db",
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [
+        {
+          "name": "save",
+          "receiver": "repository",
+          "category": "db",
+          "tier": "receiver_pattern",
+          "evidence": "receiver name `repository` matches db pattern",
+          "line": 17,
+          "in_loop": false,
+          "in_await": false
+        }
+      ],
+      "complexity": 1,
+      "loc": 5,
+      "nesting_depth": 0,
+      "parameter_count": 1,
+      "is_async": false,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.06257919871635756,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    }
+  ]
+}

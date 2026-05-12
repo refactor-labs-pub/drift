@@ -8,6 +8,9 @@
 #
 # Everything else (setup, mock UI, icons, linux build, cleanup) is below;
 # see `make help` for the full list.
+#
+# Help is auto-generated: add `## doc string` after any target ':' and it shows
+# up in `make help`. `### Section name` lines start a new help section.
 # =============================================================================
 
 # --- Config -------------------------------------------------------------------
@@ -50,6 +53,7 @@ RESET  := \033[0m
         warnings lint
 
 # === Tier 1 — the 3 commands ================================================
+### Tier 1 (the 3 you'll use)
 
 dev: install ## ① Run desktop app with hot reload (ctrl+C to stop)
 	@printf "$(BLUE)▶$(RESET) launching drift-lab on $(UNAME_S) — ctrl+C to stop\n"
@@ -62,9 +66,8 @@ compile: install ## ② Release build for the host OS
 
 ship: compile open ## ③ Compile, then open the built .app
 
-run: dev ## alias for `dev`
-
 # === Setup ===================================================================
+### Setup
 
 setup: install-rust install-tauri-cli icons install-js ## One-time machine setup
 	@printf "$(GREEN)✓$(RESET) drift-lab is ready — try: make\n"
@@ -102,7 +105,10 @@ install-tauri-cli: ## cargo install tauri-cli (~3-5 min the first time)
 		cargo install tauri-cli --version "^2.0" --locked; \
 	fi
 
-# === Frontend-only dev =======================================================
+# === Dev variants ============================================================
+### Dev variants
+
+run: dev ## alias for `dev`
 
 ui: install-js ## Run just the React UI in a browser (no backend — IPC calls will fail)
 	@printf "$(BLUE)▶$(RESET) vite dev server — http://localhost:1420\n"
@@ -111,6 +117,7 @@ ui: install-js ## Run just the React UI in a browser (no backend — IPC calls w
 	@cd $(UI_DIR) && npm run dev
 
 # === Icons ===================================================================
+### Icons
 
 icons: $(ICON_SOURCE) ## Regenerate every platform icon from icon-source.png
 	@command -v cargo-tauri >/dev/null 2>&1 || { \
@@ -135,6 +142,7 @@ raw=b''.join(b'\x00'+r for r in rows);\
 open('$@','wb').write(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',ihdr)+chunk(b'IDAT',zlib.compress(raw,6))+chunk(b'IEND',b''))"
 
 # === Compile variants ========================================================
+### Compile variants
 
 compile-mac: ## macOS-only release build (errors on other hosts)
 ifeq ($(UNAME_S),Darwin)
@@ -167,6 +175,7 @@ compile-linux: install-js ## Linux .deb + AppImage via Docker (works from macOS)
 	@printf "$(GREEN)✓$(RESET) linux bundles → $(TAURI_DIR)/target-linux/release/bundle/\n"
 
 # === Launch ==================================================================
+### Launch
 
 open: ## Open the most-recently-built .app (macOS)
 ifeq ($(UNAME_S),Darwin)
@@ -199,6 +208,7 @@ else
 endif
 
 # === Lint / warnings =========================================================
+### Lint / warnings
 
 warnings: check-rust ## Show all rustc warnings (forces re-check so cache can't hide them)
 	@printf "$(BLUE)▶$(RESET) running cargo check on $(TAURI_DIR) (all targets)\n"
@@ -211,6 +221,7 @@ lint: check-rust ## Show all clippy warnings (forces re-check so cache can't hid
 	@cd $(TAURI_DIR) && cargo clippy --all-targets --color always
 
 # === Cleanup =================================================================
+### Cleanup
 
 clean: ## Remove build outputs (keeps node_modules + cargo cache)
 	rm -rf $(UI_DIR)/dist $(UI_DIR)/dist-tsbuild-node $(UI_DIR)/*.tsbuildinfo
@@ -222,26 +233,10 @@ distclean: clean ## Also drop node_modules + cargo target (full reset)
 	rm -rf $(TAURI_DIR)/target $(TAURI_DIR)/gen
 	rm -rf .cargo-linux
 
-# === Help ====================================================================
-
-help: ## Show this help
-	@printf "\n$(BLUE)Drift Lab — make targets$(RESET)\n\n"
-	@printf "  $(GREEN)Tier 1 (the 3 you'll use)$(RESET)\n"
-	@grep -hE '^(dev|compile|ship):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
-	@printf "\n  $(GREEN)Setup$(RESET)\n"
-	@grep -hE '^(setup|install|install-js|install-rust|install-tauri-cli|check-rust|icons):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
-	@printf "\n  $(GREEN)Dev variants$(RESET)\n"
-	@grep -hE '^(run|ui):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
-	@printf "\n  $(GREEN)Compile variants$(RESET)\n"
-	@grep -hE '^(compile-mac|compile-linux):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
-	@printf "\n  $(GREEN)Lint / warnings$(RESET)\n"
-	@grep -hE '^(warnings|lint):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
-	@printf "\n  $(GREEN)Launch / cleanup$(RESET)\n"
-	@grep -hE '^(open|trust|clean|distclean|help):.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}'
+help: ## Show this help (auto-generated from inline doc strings)
+	@printf "\n$(BLUE)Drift Lab — make targets$(RESET)\n"
+	@awk 'BEGIN { FS = ":.*## " } \
+		/^### / { printf "\n  $(GREEN)%s$(RESET)\n", substr($$0, 5); next } \
+		/^[a-zA-Z0-9_.-]+:.*## / { printf "    $(BLUE)%-18s$(RESET) %s\n", $$1, $$2 }' \
+		$(MAKEFILE_LIST)
 	@printf "\n"

@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://drift.dev/schema/profile.v1.json",
+  "title": "Drift Profile",
+  "description": "Unified profile format covering static call-tree analysis (current) and future runtime sampled/evented modes. Modeled on speedscope, pprof, V8 CPU profile, and JetBrains dotTrace Call Tree.",
+
+  "type": "object",
+  "required": ["schema_version", "mode", "summary", "entries"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Profile-format schema version, MAJOR.MINOR. Bump major on breaking change."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["static", "sampled", "evented"],
+      "description": "static = derived from source without execution (this tool today). sampled = pprof/V8-style stack samples. evented = speedscope-style open/close frame events."
+    },
+    "generator": {
+      "$ref": "#/$defs/Generator"
+    },
+    "summary": {
+      "$ref": "#/$defs/Summary"
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CallTreeNode" },
+      "description": "One tree per entry point. For static mode each entry is a root the user pinned (e.g. an HTTP handler)."
+    },
+    "frames": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Frame" },
+      "description": "Optional interned frame table (speedscope-style). When present, CallTreeNode.frame_id references into it. When absent, CallTreeNode carries name/file/line inline."
+    },
+    "string_table": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional pprof-style string interning. Index 0 MUST be the empty string when present."
+    }
+  },
+
+  "$defs": {
+    "Generator": {
+      "type": "object",
+      "description": "Provenance: what produced this file.",
+      "properties": {
+        "tool": { "type": "string", "examples": ["drift-static-profiler"] },
+        "version": { "type": "string", "examples": ["0.1.0"] },
+        "host": { "type": "string", "description": "Optional: hostname or environment" },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "source_root": { "type": "string", "description": "Absolute path of the project root analyzed" },
+        "language_versions": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "e.g. {\"python\": \"tree-sitter-python 0.23\", \"java\": \"...\"}"
+        }
+      },
+      "required": ["tool", "version"]
+    },
+
+    "Summary": {
+      "type": "object",
+      "description": "Top-level rollup. Mirrors PyCharm's Statistics tab + dotTrace overview.",
+      "required": ["languages", "files", "symbols", "edges", "categories"],
+      "properties": {
+        "languages": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["python", "java", "typescript", "javascript", "go", "rust", "ruby", "csharp", "cpp", "c"] },
+          "description": "Languages encountered in the source root."
+        },
+        "files": { "type": "integer", "minimum": 0 },
+        "symbols": { "type": "integer", "minimum": 0, "description": "Total defined symbols across the project." },
+        "edges": { "type": "integer", "minimum": 0, "description": "Total directed edges in the call graph." },
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Wall-clock time of the analysis itself (not the analyzed program). Optional."
+        },
+        "categories": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Aggregate category counts across all entries.",
+          "examples": [
+            { "db": 8, "network": 2, "io": 0, "cache": 0, "queue": 0, "log": 0, "compute": 0 }
+          ]
+        },
+        "top_callers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RankedSymbol" },
+          "description": "Symbols ranked by fan-in (incoming call count)."
+        },
+        "top_callees": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RankedSymbol" },
+          "description": "Symbols ranked by fan-out (outgoing call count)."
+        },
+        "hot_paths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/HotPath" },
+          "description": "Chains from an entry to a categorized leaf. Like PyCharm's 'Most affected' but statically derived."
+        },
+        "dead_code": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RankedSymbol" },
+          "description": "Symbols with no callers AND not pinned as entries."
+        },
+        "pagerank_top": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "file", "line", "score"],
+            "properties": {
+              "name": { "type": "string" },
+              "file": { "type": "string" },
+              "line": { "type": "integer", "minimum": 1 },
+              "parent_class": { "type": ["string", "null"] },
+              "score": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "recursive_symbols": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RankedSymbol" },
+          "description": "Symbols in an SCC of size > 1 (mutual recursion)."
+        }
+      }
+    },
+
+    "RankedSymbol": {
+      "type": "object",
+      "required": ["name", "file", "line", "count"],
+      "properties": {
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "HotPath": {
+      "type": "object",
+      "required": ["frames", "depth", "terminal_category"],
+      "properties": {
+        "frames": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Ordered frame labels from entry to leaf."
+        },
+        "depth": { "type": "integer", "minimum": 0 },
+        "terminal_category": { "$ref": "#/$defs/Category" }
+      }
+    },
+
+    "Frame": {
+      "type": "object",
+      "description": "Interned function/symbol descriptor. Mirrors speedscope Frame and pprof Function.",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Short identifier, e.g. `save`." },
+        "qualified_name": { "type": "string", "description": "Fully-qualified, e.g. `OrderRepository.save`." },
+        "signature": { "type": "string", "description": "Language-specific signature, e.g. `save(order: Order): Order`." },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "enum": ["Function", "Method", "Class", "Lambda", "Native", "Inline"] },
+        "language": { "type": "string" },
+        "module": { "type": "string", "description": "Containing module / package / namespace." },
+        "is_system": { "type": "boolean", "default": false, "description": "Standard library / runtime frame." },
+        "is_native": { "type": "boolean", "default": false }
+      }
+    },
+
+    "CallTreeNode": {
+      "type": "object",
+      "description": "One node in the displayed call tree. Maps to PyCharm/dotTrace Call Tree rows and V8 ProfileNode.",
+      "required": ["id", "name", "kind", "file", "line", "depth", "children"],
+      "properties": {
+        "id": { "type": "string", "description": "Stable id within this profile (file::class::name)." },
+        "frame_id": { "type": "integer", "description": "If `frames` table is provided, index into it. Otherwise omit." },
+
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["Function", "Method", "Class", "Lambda", "Native"] },
+        "file": { "type": "string", "description": "Path relative to the analyzed project root." },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+
+        "depth": { "type": "integer", "minimum": 0, "description": "0 = entry point, increments per nesting level." },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CallTreeNode" }
+        },
+        "truncated_reason": {
+          "type": ["string", "null"],
+          "enum": [null, "cycle", "max-depth", "external"],
+          "description": "Why we stopped descending here."
+        },
+
+        "subtree_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total reachable symbol count from this node (proxy for total time)."
+        },
+        "callers_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Direct fan-in. Dual of callees_count."
+        },
+        "callees_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Direct fan-out. Mirrors PyCharm 'calls' column."
+        },
+        "callers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CallerRef" },
+          "description": "Inverse edges. Lets the UI render PyCharm's 'callers' panel."
+        },
+
+        "category_self": {
+          "type": ["string", "null"],
+          "oneOf": [{ "$ref": "#/$defs/Category" }, { "type": "null" }],
+          "description": "If this node itself touches a categorized resource (e.g. session.add → db)."
+        },
+        "categories_reached": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Aggregated category counts over this node's transitive subtree.",
+          "examples": [{ "db": 4 }]
+        },
+        "external_calls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExternalCall" },
+          "description": "Library / framework calls that don't resolve to a defined symbol in the project."
+        },
+
+        "self_value": {
+          "type": "number",
+          "description": "Runtime-only: self cost in this node (excludes callees). Unit = profile.unit."
+        },
+        "total_value": {
+          "type": "number",
+          "description": "Runtime-only: cost of this node + its subtree. Unit = profile.unit."
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Runtime-only: sample hits on this frame's top of stack."
+        },
+
+        "complexity": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "McCabe cyclomatic complexity of this symbol's body (decision points + 1)."
+        },
+        "loc": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines of code in this symbol's body."
+        },
+        "nesting_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum nesting level inside the body."
+        },
+        "parameter_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "is_async": {
+          "type": "boolean"
+        },
+        "call_site_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total invocations of this symbol anywhere in the project (not unique callers)."
+        },
+        "is_recursive": {
+          "type": "boolean",
+          "description": "True if this symbol is in a strongly-connected component of size > 1."
+        },
+        "pagerank": {
+          "type": "number",
+          "minimum": 0,
+          "description": "PageRank score over the directed call graph (Brin-Page, alpha=0.85)."
+        },
+        "percent_total": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "subtree_size / entry-root.subtree_size * 100."
+        },
+        "percent_parent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "subtree_size / parent.subtree_size * 100."
+        },
+        "n_plus_one_risk": {
+          "type": "boolean",
+          "description": "True if a db/cache call is invoked inside a loop within this symbol's body."
+        },
+        "blocking_in_async": {
+          "type": "boolean",
+          "description": "True if is_async and a db/network/io call is invoked outside an await expression."
+        }
+      }
+    },
+
+    "CallerRef": {
+      "type": "object",
+      "required": ["id", "name", "file", "line"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] }
+      }
+    },
+
+    "ExternalCall": {
+      "type": "object",
+      "description": "An unresolved reference (third-party / stdlib) that the catalog classified.",
+      "required": ["name", "category", "tier", "evidence", "line"],
+      "properties": {
+        "name": { "type": "string", "description": "Called method/function name." },
+        "receiver": { "type": ["string", "null"], "description": "Object name before the call, when present (e.g. `session` in `session.add(order)`)." },
+        "category": { "$ref": "#/$defs/Category" },
+        "tier": { "$ref": "#/$defs/ClassifyTier" },
+        "evidence": { "type": "string", "description": "Human-readable reason for the classification." },
+        "line": { "type": "integer", "minimum": 1 },
+        "in_loop": {
+          "type": "boolean",
+          "description": "True if the call site is inside a loop AST node (signals N+1 candidate)."
+        },
+        "in_await": {
+          "type": "boolean",
+          "description": "True if the call site is inside an await_expression."
+        }
+      }
+    },
+
+    "Category": {
+      "type": "string",
+      "enum": ["db", "network", "io", "cache", "queue", "log", "compute"],
+      "description": "Resource category. `compute` is the default for everything that doesn't touch an external resource."
+    },
+
+    "ClassifyTier": {
+      "type": "string",
+      "enum": ["imported_module", "receiver_pattern", "method_signature"],
+      "description": "Confidence tier. imported_module > receiver_pattern > method_signature."
+    },
+
+    "Sample": {
+      "type": "object",
+      "description": "Runtime-only: pprof/V8-style stack sample. Not used in static mode.",
+      "required": ["stack"],
+      "properties": {
+        "stack": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Frame ids, root → leaf (or leaf → root if `stack_order = leaf_first`)."
+        },
+        "values": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "One value per profile.value_types entry (e.g. cpu_ns, alloc_bytes)."
+        },
+        "thread_id": { "type": "integer" },
+        "timestamp_ns": { "type": "integer" }
+      }
+    },
+
+    "ValueType": {
+      "type": "object",
+      "description": "pprof-style value column descriptor. Runtime mode only.",
+      "required": ["type", "unit"],
+      "properties": {
+        "type": { "type": "string", "examples": ["cpu", "wall", "alloc_objects", "alloc_space", "edges"] },
+        "unit": { "type": "string", "enum": ["count", "nanoseconds", "microseconds", "milliseconds", "bytes", "edges"] }
+      }
+    }
+  }
+}

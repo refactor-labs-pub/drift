@@ -1,0 +1,32 @@
+[package]
+name = "drift-static-profiler"
+version = "0.1.0"
+edition = "2021"
+description = "Language-agnostic static call-tree analyzer for drift-lab"
+license = "MIT"
+
+[[bin]]
+name = "drift-static-profiler"
+path = "src/main.rs"
+
+[lib]
+name = "drift_static_profiler"
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter = "0.25"
+tree-sitter-python = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+ignore = "0.4"
+petgraph = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

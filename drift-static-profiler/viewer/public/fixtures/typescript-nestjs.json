@@ -1,0 +1,470 @@
+{
+  "schema_version": "1.0",
+  "mode": "static",
+  "generator": {
+    "tool": "drift-static-profiler",
+    "version": "0.1.0"
+  },
+  "summary": {
+    "languages": [
+      "typescript"
+    ],
+    "files": 8,
+    "symbols": 17,
+    "edges": 6,
+    "categories": {
+      "cache": 0,
+      "compute": 0,
+      "db": 2,
+      "io": 0,
+      "log": 0,
+      "network": 0,
+      "queue": 0
+    },
+    "top_callers": [
+      {
+        "name": "Order",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
+        "line": 4,
+        "parent_class": null,
+        "count": 1
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 16,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "create",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "count": 1
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 10,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
+        "line": 13,
+        "parent_class": "OrdersRepository",
+        "count": 1
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 24,
+        "parent_class": "OrdersService",
+        "count": 1
+      }
+    ],
+    "top_callees": [
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 10,
+        "parent_class": "OrdersService",
+        "count": 3
+      },
+      {
+        "name": "bootstrap",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 5,
+        "parent_class": null,
+        "count": 1
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 16,
+        "parent_class": "OrdersService",
+        "count": 1
+      },
+      {
+        "name": "create",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "count": 1
+      }
+    ],
+    "hot_paths": [
+      {
+        "frames": [
+          "OrdersController.create",
+          "OrdersService.createOrder",
+          "OrdersRepository.save"
+        ],
+        "depth": 2,
+        "terminal_category": "db"
+      }
+    ],
+    "dead_code": [
+      {
+        "name": "bootstrap",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 5,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 7,
+        "parent_class": "OrdersController",
+        "count": 0
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
+        "line": 8,
+        "parent_class": "OrdersRepository",
+        "count": 0
+      },
+      {
+        "name": "findById",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
+        "line": 17,
+        "parent_class": "OrdersRepository",
+        "count": 0
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 8,
+        "parent_class": "OrdersService",
+        "count": 0
+      }
+    ],
+    "pagerank_top": [
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 10,
+        "parent_class": "OrdersService",
+        "score": 0.11721755943455223
+      },
+      {
+        "name": "Order",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
+        "line": 4,
+        "parent_class": null,
+        "score": 0.11441082541460029
+      },
+      {
+        "name": "create",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "score": 0.08044000938436513
+      },
+      {
+        "name": "save",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
+        "line": 13,
+        "parent_class": "OrdersRepository",
+        "score": 0.07746163026761439
+      },
+      {
+        "name": "buildOrder",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 16,
+        "parent_class": "OrdersService",
+        "score": 0.07746163026761439
+      },
+      {
+        "name": "validate",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 24,
+        "parent_class": "OrdersService",
+        "score": 0.07746163026761439
+      },
+      {
+        "name": "AppModule",
+        "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
+        "line": 18,
+        "parent_class": null,
+        "score": 0.04141333772396719
+      },
+      {
+        "name": "bootstrap",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 5,
+        "parent_class": null,
+        "score": 0.04141333772396719
+      },
+      {
+        "name": "CreateOrderDto",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/create-order.dto.ts",
+        "line": 1,
+        "parent_class": null,
+        "score": 0.04141333772396719
+      },
+      {
+        "name": "OrdersController",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 6,
+        "parent_class": null,
+        "score": 0.04141333772396719
+      }
+    ],
+    "recursive_symbols": []
+  },
+  "entries": [
+    {
+      "id": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts::OrdersController::create",
+      "name": "create",
+      "kind": "Method",
+      "file": "src/orders/orders.controller.ts",
+      "line": 10,
+      "depth": 0,
+      "parent_class": "OrdersController",
+      "children": [
+        {
+          "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::createOrder",
+          "name": "createOrder",
+          "kind": "Method",
+          "file": "src/orders/orders.service.ts",
+          "line": 10,
+          "depth": 1,
+          "parent_class": "OrdersService",
+          "children": [
+            {
+              "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::buildOrder",
+              "name": "buildOrder",
+              "kind": "Method",
+              "file": "src/orders/orders.service.ts",
+              "line": 16,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [
+                {
+                  "id": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts::::Order",
+                  "name": "Order",
+                  "kind": "Class",
+                  "file": "src/orders/order.entity.ts",
+                  "line": 4,
+                  "depth": 3,
+                  "parent_class": null,
+                  "children": [],
+                  "truncated_reason": null,
+                  "callers": [
+                    {
+                      "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::buildOrder",
+                      "name": "buildOrder",
+                      "file": "src/orders/orders.service.ts",
+                      "line": 16,
+                      "parent_class": "OrdersService"
+                    }
+                  ],
+                  "callers_count": 1,
+                  "callees_count": 0,
+                  "subtree_size": 1,
+                  "category_self": null,
+                  "categories_reached": {},
+                  "external_calls": [],
+                  "complexity": 0,
+                  "loc": 0,
+                  "nesting_depth": 0,
+                  "parameter_count": 0,
+                  "is_async": false,
+                  "call_site_count": 1,
+                  "is_recursive": false,
+                  "pagerank": 0.11441082541460029,
+                  "percent_total": 16.666666666666664,
+                  "percent_parent": 50.0,
+                  "n_plus_one_risk": false,
+                  "blocking_in_async": false
+                }
+              ],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "src/orders/orders.service.ts",
+                  "line": 10,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 1,
+              "subtree_size": 2,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 2,
+              "loc": 7,
+              "nesting_depth": 0,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.07746163026761439,
+              "percent_total": 33.33333333333333,
+              "percent_parent": 40.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::validate",
+              "name": "validate",
+              "kind": "Method",
+              "file": "src/orders/orders.service.ts",
+              "line": 24,
+              "depth": 2,
+              "parent_class": "OrdersService",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "src/orders/orders.service.ts",
+                  "line": 10,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": null,
+              "categories_reached": {},
+              "external_calls": [],
+              "complexity": 4,
+              "loc": 8,
+              "nesting_depth": 1,
+              "parameter_count": 1,
+              "is_async": false,
+              "call_site_count": 1,
+              "is_recursive": false,
+              "pagerank": 0.07746163026761439,
+              "percent_total": 16.666666666666664,
+              "percent_parent": 20.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": false
+            },
+            {
+              "id": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts::OrdersRepository::save",
+              "name": "save",
+              "kind": "Method",
+              "file": "src/orders/orders.repository.ts",
+              "line": 13,
+              "depth": 2,
+              "parent_class": "OrdersRepository",
+              "children": [],
+              "truncated_reason": null,
+              "callers": [
+                {
+                  "id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::createOrder",
+                  "name": "createOrder",
+                  "file": "src/orders/orders.service.ts",
+                  "line": 10,
+                  "parent_class": "OrdersService"
+                }
+              ],
+              "callers_count": 1,
+              "callees_count": 0,
+              "subtree_size": 1,
+              "category_self": "db",
+              "categories_reached": {
+                "db": 2
+              },
+              "external_calls": [
+                {
+                  "name": "save",
+                  "receiver": "repo",
+                  "category": "db",
+                  "tier": "receiver_pattern",
+                  "evidence": "receiver name `repo` matches db pattern",
+                  "line": 14,
+                  "in_loop": false,
+                  "in_await": false
+                }
+              ],
+              "complexity": 1,
+              "loc": 3,
+              "nesting_depth": 0,
+              "parameter_count": 1,
+              "is_async": true,
+              "call_site_count": 2,
+              "is_recursive": false,
+              "pagerank": 0.07746163026761439,
+              "percent_total": 16.666666666666664,
+              "percent_parent": 20.0,
+              "n_plus_one_risk": false,
+              "blocking_in_async": true
+            }
+          ],
+          "truncated_reason": null,
+          "callers": [
+            {
+              "id": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts::OrdersController::create",
+              "name": "create",
+              "file": "src/orders/orders.controller.ts",
+              "line": 10,
+              "parent_class": "OrdersController"
+            }
+          ],
+          "callers_count": 1,
+          "callees_count": 3,
+          "subtree_size": 5,
+          "category_self": null,
+          "categories_reached": {
+            "db": 2
+          },
+          "external_calls": [],
+          "complexity": 1,
+          "loc": 5,
+          "nesting_depth": 0,
+          "parameter_count": 1,
+          "is_async": true,
+          "call_site_count": 1,
+          "is_recursive": false,
+          "pagerank": 0.11721755943455223,
+          "percent_total": 83.33333333333334,
+          "percent_parent": 83.33333333333334,
+          "n_plus_one_risk": false,
+          "blocking_in_async": false
+        }
+      ],
+      "truncated_reason": null,
+      "callers": [
+        {
+          "id": "tests/fixtures/typescript-nestjs/src/main.ts::::bootstrap",
+          "name": "bootstrap",
+          "file": "src/main.ts",
+          "line": 5,
+          "parent_class": null
+        }
+      ],
+      "callers_count": 1,
+      "callees_count": 1,
+      "subtree_size": 6,
+      "category_self": null,
+      "categories_reached": {
+        "db": 2
+      },
+      "external_calls": [],
+      "complexity": 1,
+      "loc": 4,
+      "nesting_depth": 0,
+      "parameter_count": 1,
+      "is_async": true,
+      "call_site_count": 1,
+      "is_recursive": false,
+      "pagerank": 0.08044000938436513,
+      "percent_total": 100.0,
+      "percent_parent": 100.0,
+      "n_plus_one_risk": false,
+      "blocking_in_async": false
+    }
+  ]
+}
