@@ -15,7 +15,11 @@ import { CallGraphView } from './CallGraphView';
 import { TIPS } from './tooltips';
 import { Help } from './Help';
 import { Splitter, useResizablePanel } from './useResizableColumns';
-import type { CallTreeNode, FindingKind, Report } from './types';
+import {
+  buildEntryPointFilterOptions,
+  filterEntriesByDeclSource,
+} from './types';
+import type { CallTreeNode, EntryDecl, FindingKind, Report } from './types';
 
 type FlameMode = 'kind' | 'category' | 'complexity' | 'smells';
 type BottomTab = 'report' | 'tree' | 'graph' | 'roots' | 'hot' | 'smells' | 'insights' | 'stats';
@@ -173,6 +177,7 @@ export function App() {
         setFixtureKey={setFixtureKey}
         fixtureLabel={fixtureLabel}
         roots={report?.entries ?? []}
+        entryDecls={report?.summary?.entry_declarations ?? []}
         activeRootId={activeRootId}
         setActiveRootId={setActiveRootId}
         search={search}
@@ -392,6 +397,7 @@ function Toolbar(props: {
   setFixtureKey: (k: string) => void;
   fixtureLabel: string;
   roots: CallTreeNode[];
+  entryDecls: EntryDecl[];
   activeRootId: string | null;
   setActiveRootId: (id: string) => void;
   search: string;
@@ -400,24 +406,60 @@ function Toolbar(props: {
   setFlameMode: (m: FlameMode) => void;
   description: string;
 }) {
-  const { fixtureKey, setFixtureKey, fixtureLabel, roots, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
+  const { fixtureKey, setFixtureKey, fixtureLabel, roots, entryDecls, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
+
+  // Source-filter dropdown: lets the user narrow the ENTRY picker to
+  // roots launched by a specific manifest (Dockerfile, package.json,
+  // pyproject, Cargo, deno). Options are derived from this scan's
+  // `entry_declarations` — kinds with no matched root in `roots` don't
+  // appear, so the dropdown never offers an option that yields zero rows.
+  const sourceOptions = useMemo(
+    () => buildEntryPointFilterOptions(roots, entryDecls),
+    [roots, entryDecls],
+  );
+  const [sourceFilterValue, setSourceFilterValue] = useState<string>('all');
+  const activeSourceFilter = useMemo(
+    () => sourceOptions.find((o) => o.value === sourceFilterValue) ?? sourceOptions[0],
+    [sourceOptions, sourceFilterValue],
+  );
+  // If the scan changes and the previously-picked source filter no
+  // longer exists, fall back to `all` so the picker doesn't go stale.
+  useEffect(() => {
+    if (!sourceOptions.some((o) => o.value === sourceFilterValue)) {
+      setSourceFilterValue('all');
+    }
+  }, [sourceOptions, sourceFilterValue]);
+  const sourceFilteredRoots = useMemo(
+    () =>
+      activeSourceFilter
+        ? filterEntriesByDeclSource(roots, activeSourceFilter.filter, entryDecls)
+        : roots,
+    [roots, activeSourceFilter, entryDecls],
+  );
 
   // Filter entry dropdown by search so the user can type to narrow 55+ entries.
   // Always include the active root so the select value stays valid.
+  // Source filter runs FIRST, then search narrows further within the
+  // source-filtered subset.
   const filteredRoots = useMemo(() => {
-    if (!search) return roots;
+    const base = sourceFilteredRoots;
+    if (!search) return base;
     const q = search.toLowerCase();
-    const matched = roots.filter(r => {
+    const matched = base.filter(r => {
       const name = (r.parent_class ? `${r.parent_class}.` : '') + r.name;
       return name.toLowerCase().includes(q) || r.file.toLowerCase().includes(q);
     });
-    // Ensure the active selection is always present in the list.
+    // Ensure the active selection is always present in the list — even
+    // if it was filtered out by source or search — so the <select>
+    // value stays valid until the user picks something else.
     if (activeRootId && !matched.find(r => r.id === activeRootId)) {
       const active = roots.find(r => r.id === activeRootId);
       if (active) matched.unshift(active);
     }
     return matched;
-  }, [roots, search, activeRootId]);
+  }, [sourceFilteredRoots, roots, search, activeRootId]);
+
+  const showSourceFilter = sourceOptions.length > 1;
 
   return (
     <div style={toolbarStyle}>
@@ -439,6 +481,28 @@ function Toolbar(props: {
           </option>
         ))}
       </select>
+      {showSourceFilter && (
+        <>
+          <label style={labelStyle}>
+            <Help text="Narrow the Entry picker to roots launched by a specific manifest (Dockerfile, package.json, pyproject, deno, Cargo). Options come from this scan; categories with no matched root are hidden.">
+              Source
+            </Help>
+          </label>
+          <select
+            value={sourceFilterValue}
+            onChange={(e) => setSourceFilterValue(e.target.value)}
+            style={selectStyle}
+            title="Filter the Entry dropdown by which manifest declares each root"
+            aria-label="Filter entry points by source manifest"
+          >
+            {sourceOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <label style={labelStyle}>
         <Help text={TIPS.toolbar_entry}>Entry</Help>
       </label>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   CATEGORY_COLORS,
@@ -6,7 +6,9 @@ import {
   EFFORT_LABEL,
   FINDING_KIND_LABEL,
   SEVERITY_COLORS,
+  buildEntryPointFilterOptions,
   entryFamily,
+  filterEntriesByDeclSource,
 } from '../types';
 import type {
   CallTreeNode,
@@ -143,7 +145,11 @@ export function ScanReportPage() {
           allFindings={allFindings}
           fixtureKey={fixtureKey}
         />
-        <EntryPointsCard entries={entries} fixtureKey={fixtureKey} />
+        <EntryPointsCard
+          entries={entries}
+          entryDecls={entryDecls}
+          fixtureKey={fixtureKey}
+        />
         <EntryDeclarationsCard
           entryDecls={entryDecls}
           callTreeEntries={entries}
@@ -718,48 +724,130 @@ function lastSegment(id: string): string {
 }
 
 // ─── Entry points ──────────────────────────────────────────────────────
+// Same "filter by entry source" dropdown the in-tab card carries (see
+// `EntryPointsCard` in `../ScanReport.tsx`). Options are dynamic — only
+// declaration kinds that resolved to at least one of the entries in this
+// scan are surfaced.
 
 function EntryPointsCard({
-  entries, fixtureKey,
-}: { entries: CallTreeNode[]; fixtureKey: string }) {
-  // Show ALL entries (sorted by reach DESC), scrollable. Previously
-  // capped at 10 — but a `make scan-roots` output can have dozens, and
-  // hiding them silently is confusing. The Initial Roots section below
-  // shows the same data with full detail per row; this card stays as
-  // the at-a-glance index.
-  const sorted = [...entries].sort((a, b) => b.subtree_size - a.subtree_size);
+  entries, entryDecls, fixtureKey,
+}: { entries: CallTreeNode[]; entryDecls: EntryDecl[]; fixtureKey: string }) {
+  const filterOptions = useMemo(
+    () => buildEntryPointFilterOptions(entries, entryDecls),
+    [entries, entryDecls],
+  );
+  const [filterValue, setFilterValue] = useState<string>('all');
+  const activeFilter = useMemo(
+    () => filterOptions.find((o) => o.value === filterValue) ?? filterOptions[0],
+    [filterOptions, filterValue],
+  );
+  useEffect(() => {
+    if (!filterOptions.some((o) => o.value === filterValue)) {
+      setFilterValue('all');
+    }
+  }, [filterOptions, filterValue]);
+
+  const filtered = useMemo(
+    () =>
+      activeFilter
+        ? filterEntriesByDeclSource(entries, activeFilter.filter, entryDecls)
+        : entries,
+    [entries, activeFilter, entryDecls],
+  );
+  const sorted = useMemo(
+    () => [...filtered].sort((a, b) => b.subtree_size - a.subtree_size),
+    [filtered],
+  );
+  const showFilter = filterOptions.length > 1;
+
   return (
-    <Card title={`entry points · ${entries.length}`}>
+    <Card
+      title={`entry points · ${filtered.length}${
+        filtered.length !== entries.length ? ` / ${entries.length}` : ''
+      }`}
+      hint="Use the source filter to narrow to entries launched by a specific manifest (Dockerfile, package.json, pyproject, etc.). Options are derived from this scan; categories with no matched root are hidden."
+    >
       {entries.length === 0 ? (
         <Empty msg="—" />
       ) : (
         <div style={scrollListStyle}>
-          <ul style={listStyle}>
-            {sorted.map((e) => (
-              <Link
-                key={e.id}
-                to={`/scan/${fixtureKey}/node/${encodeURIComponent(e.id)}`}
-                style={rowLinkStyle}
-                title={`Open ${e.name} detail page`}
+          {showFilter && (
+            <div style={pageEntryPointFilterRowStyle}>
+              <label style={pageEntryPointFilterLabelStyle} htmlFor="page-entry-point-filter">
+                filter by source
+              </label>
+              <select
+                id="page-entry-point-filter"
+                value={filterValue}
+                onChange={(e) => setFilterValue(e.target.value)}
+                style={pageEntryPointFilterSelectStyle}
+                aria-label="Filter entry points by source manifest"
               >
-                <li style={liStyle}>
-                  <code style={codeStyle}>
-                    {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
-                    {e.name}
-                  </code>
-                  <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
-                    reach {e.subtree_size}
-                  </span>
-                  <span style={locStyle}>{e.file}:{e.line}</span>
-                </li>
-              </Link>
-            ))}
-          </ul>
+                {filterOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {sorted.length === 0 ? (
+            <Empty msg="no entries match the selected source filter" />
+          ) : (
+            <ul style={listStyle}>
+              {sorted.map((e) => (
+                <Link
+                  key={e.id}
+                  to={`/scan/${fixtureKey}/node/${encodeURIComponent(e.id)}`}
+                  style={rowLinkStyle}
+                  title={`Open ${e.name} detail page`}
+                >
+                  <li style={liStyle}>
+                    <code style={codeStyle}>
+                      {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
+                      {e.name}
+                    </code>
+                    <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
+                      reach {e.subtree_size}
+                    </span>
+                    <span style={locStyle}>{e.file}:{e.line}</span>
+                  </li>
+                </Link>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </Card>
   );
 }
+
+const pageEntryPointFilterRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 4px',
+  borderBottom: '1px solid #2f3136',
+};
+const pageEntryPointFilterLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: '#7e8189',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  flexShrink: 0,
+};
+const pageEntryPointFilterSelectStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: '#1e1f22',
+  color: '#d7d9dc',
+  border: '1px solid #3f4147',
+  borderRadius: 3,
+  padding: '3px 6px',
+  fontSize: 11,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+};
 
 // ─── Docker entry points ────────────────────────────────────────────────
 // Mirror of the in-tab `EntryDeclarationsCard` in `../ScanReport.tsx`,

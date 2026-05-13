@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   CATEGORY_COLORS,
   ENTRY_KIND_LABEL,
   FINDING_KIND_LABEL,
   SEVERITY_COLORS,
+  buildEntryPointFilterOptions,
   entryFamily,
+  filterEntriesByDeclSource,
 } from './types';
 import type {
   CallTreeNode,
@@ -97,7 +99,11 @@ export function ScanReport({ report, onJump, onShowKind, onPickRoot }: Props) {
         <CategoriesCard cats={cats} />
         <LanguagesCard languages={langBreakdown} />
         <HotZonesCard zones={topHotZones} onJump={onJump} />
-        <EntryPointsCard entries={entries} onPickRoot={onPickRoot} />
+        <EntryPointsCard
+          entries={entries}
+          entryDecls={summary.entry_declarations ?? []}
+          onPickRoot={onPickRoot}
+        />
         <EntryDeclarationsCard
           entryDecls={summary.entry_declarations ?? []}
           callTreeEntries={entries}
@@ -393,50 +399,120 @@ function fileLineFromId(id: string, line: number): string {
 }
 
 // ─── Entry points ──────────────────────────────────────────────────────
+// Lists the in-graph entry points (call-tree roots). A "filter by entry
+// source" dropdown narrows the list to roots launched by a specific
+// declaration kind — e.g. only Dockerfile CMD targets, only package.json
+// scripts. Options are derived from this scan's `entry_declarations`, so
+// the dropdown never offers a category that would yield zero rows.
 
 function EntryPointsCard({
   entries,
+  entryDecls,
   onPickRoot,
 }: {
   entries: CallTreeNode[];
+  entryDecls: EntryDecl[];
   onPickRoot?: (id: string) => void;
 }) {
-  const top = useMemo(
-    () => [...entries].sort((a, b) => b.subtree_size - a.subtree_size).slice(0, 8),
-    [entries],
+  const filterOptions = useMemo(
+    () => buildEntryPointFilterOptions(entries, entryDecls),
+    [entries, entryDecls],
   );
+  // Selected option, keyed by its stable `value` string so a `<select>`
+  // can round-trip it without us holding a discriminated-union ref.
+  const [filterValue, setFilterValue] = useState<string>('all');
+  const activeFilter = useMemo(
+    () => filterOptions.find((o) => o.value === filterValue) ?? filterOptions[0],
+    [filterOptions, filterValue],
+  );
+  // If the scan changes and the previously-picked filter no longer
+  // exists, fall back to `all` so we never render an undefined filter.
+  useEffect(() => {
+    if (!filterOptions.some((o) => o.value === filterValue)) {
+      setFilterValue('all');
+    }
+  }, [filterOptions, filterValue]);
+
+  const filtered = useMemo(
+    () =>
+      activeFilter
+        ? filterEntriesByDeclSource(entries, activeFilter.filter, entryDecls)
+        : entries,
+    [entries, activeFilter, entryDecls],
+  );
+  const top = useMemo(
+    () => [...filtered].sort((a, b) => b.subtree_size - a.subtree_size).slice(0, 8),
+    [filtered],
+  );
+  // Only render the dropdown if there's something useful to pick — a
+  // scan with zero declarations only has the `all` row, which would be
+  // dead UI noise.
+  const showFilter = filterOptions.length > 1;
+
   return (
-    <Panel title={`entry points · ${entries.length}`}>
+    <Panel
+      title={`entry points · ${filtered.length}${
+        filtered.length !== entries.length ? ` / ${entries.length}` : ''
+      }`}
+      tip="In-graph roots ranked by reach. Use the filter to narrow to entries launched by a specific manifest (Dockerfile, package.json, pyproject, etc.). Options are derived from this scan; categories with no matched root are hidden."
+    >
       {entries.length === 0 ? (
         <Empty msg="—" />
       ) : (
-        <ul style={listStyle}>
-          {top.map((e) => (
-            <li
-              key={e.id}
-              style={liButtonStyle}
-              onClick={() => onPickRoot?.(e.id)}
-              title={`Switch to the Tree tab and select ${e.name}`}
-            >
-              <code style={codeStyle}>
-                {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
-                {e.name}
-              </code>
-              {e.entry_labels && e.entry_labels.length > 0 && (
-                <span
-                  style={entryInlineBadgeStyle}
-                  title={`Container entry point — ${e.entry_labels.join(', ')}`}
+        <>
+          {showFilter && (
+            <div style={entryPointFilterRowStyle}>
+              <label style={entryPointFilterLabelStyle} htmlFor="entry-point-filter">
+                filter by source
+              </label>
+              <select
+                id="entry-point-filter"
+                value={filterValue}
+                onChange={(e) => setFilterValue(e.target.value)}
+                style={entryPointFilterSelectStyle}
+                aria-label="Filter entry points by source manifest"
+                title="Show only entry points launched by a specific manifest kind"
+              >
+                {filterOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {top.length === 0 ? (
+            <Empty msg="no entries match the selected source filter" />
+          ) : (
+            <ul style={listStyle}>
+              {top.map((e) => (
+                <li
+                  key={e.id}
+                  style={liButtonStyle}
+                  onClick={() => onPickRoot?.(e.id)}
+                  title={`Switch to the Tree tab and select ${e.name}`}
                 >
-                  docker
-                </span>
-              )}
-              <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
-                reach {e.subtree_size}
-              </span>
-              <span style={locStyle}>{e.file}:{e.line}</span>
-            </li>
-          ))}
-        </ul>
+                  <code style={codeStyle}>
+                    {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
+                    {e.name}
+                  </code>
+                  {e.entry_labels && e.entry_labels.length > 0 && (
+                    <span
+                      style={entryInlineBadgeStyle}
+                      title={`Entry-point match — ${e.entry_labels.join(', ')}`}
+                    >
+                      {e.entry_labels.length > 1 ? `+${e.entry_labels.length}` : 'match'}
+                    </span>
+                  )}
+                  <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
+                    reach {e.subtree_size}
+                  </span>
+                  <span style={locStyle}>{e.file}:{e.line}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </Panel>
   );
@@ -725,6 +801,35 @@ const entrySpacerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
+};
+
+const entryPointFilterRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 4px',
+  borderBottom: '1px solid #2f3136',
+};
+
+const entryPointFilterLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: '#7e8189',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  flexShrink: 0,
+};
+
+const entryPointFilterSelectStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: '#1e1f22',
+  color: '#d7d9dc',
+  border: '1px solid #3f4147',
+  borderRadius: 3,
+  padding: '3px 6px',
+  fontSize: 11,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
 };
 
 const entryFilterRowStyle: React.CSSProperties = {

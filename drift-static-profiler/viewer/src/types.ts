@@ -160,6 +160,186 @@ export function entryFamily(kind: EntryKind): EntryFamily {
   }
 }
 
+// ── Entry-point source filter ──────────────────────────────────────────
+//
+// Lets the viewer narrow the in-graph entry-point list to "only entries
+// launched by a Dockerfile" / "only entries launched by package.json
+// scripts" / etc. The available filter values are derived from the
+// current scan — we don't show "Cargo [[bin]]" as an option if no Cargo
+// declaration in this scan resolved to a real symbol.
+
+/// A pre-computed index over the `EntryDecl[]` that says, for each kind
+/// (and each family), the set of `CallTreeNode.id`s that one or more
+/// declarations of that kind resolved to. `anyMatched` is the union —
+/// useful for the "show only matched roots" option.
+export interface EntryDeclMatchSummary {
+  byKind: Map<EntryKind, Set<string>>;
+  byFamily: Map<EntryFamily, Set<string>>;
+  anyMatched: Set<string>;
+}
+
+export function summarizeEntryDeclMatches(decls: EntryDecl[]): EntryDeclMatchSummary {
+  const byKind = new Map<EntryKind, Set<string>>();
+  const byFamily = new Map<EntryFamily, Set<string>>();
+  const anyMatched = new Set<string>();
+  for (const d of decls) {
+    if (!d.matched) continue;
+    const id = d.matched.symbol_id;
+    anyMatched.add(id);
+    let kindBucket = byKind.get(d.kind);
+    if (!kindBucket) {
+      kindBucket = new Set();
+      byKind.set(d.kind, kindBucket);
+    }
+    kindBucket.add(id);
+    const fam = entryFamily(d.kind);
+    let famBucket = byFamily.get(fam);
+    if (!famBucket) {
+      famBucket = new Set();
+      byFamily.set(fam, famBucket);
+    }
+    famBucket.add(id);
+  }
+  return { byKind, byFamily, anyMatched };
+}
+
+/// Closed-set filter applied to an entry-points list. `'all'` keeps
+/// every entry; `'any-matched'` keeps entries that any EntryDecl
+/// resolved to; the family/kind variants narrow further.
+export type EntryPointFilter =
+  | { type: 'all' }
+  | { type: 'any-matched' }
+  | { type: 'family'; family: EntryFamily }
+  | { type: 'kind'; kind: EntryKind };
+
+/// Return the set of `CallTreeNode.id`s allowed by `filter`. `null`
+/// means "no restriction" — callers should keep everything.
+export function allowedIdsForFilter(
+  filter: EntryPointFilter,
+  summary: EntryDeclMatchSummary,
+): Set<string> | null {
+  switch (filter.type) {
+    case 'all':
+      return null;
+    case 'any-matched':
+      return summary.anyMatched;
+    case 'family':
+      return summary.byFamily.get(filter.family) ?? new Set();
+    case 'kind':
+      return summary.byKind.get(filter.kind) ?? new Set();
+  }
+}
+
+/// One row in the entry-points filter dropdown. `value` is a stable
+/// string we round-trip through the `<select>` element; `parse` recovers
+/// the original [`EntryPointFilter`]. Counts are pre-computed against
+/// the current `entries` so the menu reads `Dockerfile CMD (3)`.
+export interface EntryPointFilterOption {
+  value: string;
+  label: string;
+  count: number;
+  filter: EntryPointFilter;
+}
+
+/// Build the dynamic dropdown options for `entries` against `decls`.
+/// Rules:
+///   - "All entries" is always present (count = `entries.length`).
+///   - "Any matched" is shown only if at least one entry is matched.
+///   - "Container only" / "Manifest only" are each shown only if the
+///     corresponding family has at least one matched entry AND the
+///     count differs from `anyMatched` (so we don't list redundant
+///     filters in a single-family scan).
+///   - One row per kind that resolved to at least one entry currently
+///     in `entries`. Sorted: containers first, then by kind label.
+export function buildEntryPointFilterOptions(
+  entries: { id: string }[],
+  decls: EntryDecl[],
+): EntryPointFilterOption[] {
+  const summary = summarizeEntryDeclMatches(decls);
+  const entryIds = new Set(entries.map((e) => e.id));
+  // Pre-intersect every bucket with the entries we actually have. A
+  // declaration may resolve to a symbol that the user filtered out via
+  // `--max-depth`, `--no-private`, etc.; we don't want to surface
+  // filter options that would yield zero rows.
+  const intersect = (s: Set<string>): Set<string> => {
+    const out = new Set<string>();
+    for (const id of s) if (entryIds.has(id)) out.add(id);
+    return out;
+  };
+
+  const anyMatched = intersect(summary.anyMatched);
+  const containerSet = intersect(summary.byFamily.get('container') ?? new Set());
+  const manifestSet = intersect(summary.byFamily.get('manifest') ?? new Set());
+
+  const out: EntryPointFilterOption[] = [
+    {
+      value: 'all',
+      label: `All entries · ${entries.length}`,
+      count: entries.length,
+      filter: { type: 'all' },
+    },
+  ];
+  if (anyMatched.size > 0) {
+    out.push({
+      value: 'any-matched',
+      label: `Any matched · ${anyMatched.size}`,
+      count: anyMatched.size,
+      filter: { type: 'any-matched' },
+    });
+  }
+  // Family rows — only when BOTH families are present (otherwise the
+  // single family is redundant with "Any matched").
+  if (containerSet.size > 0 && manifestSet.size > 0) {
+    out.push({
+      value: 'family:container',
+      label: `Container only · ${containerSet.size}`,
+      count: containerSet.size,
+      filter: { type: 'family', family: 'container' },
+    });
+    out.push({
+      value: 'family:manifest',
+      label: `Manifest only · ${manifestSet.size}`,
+      count: manifestSet.size,
+      filter: { type: 'family', family: 'manifest' },
+    });
+  }
+  // Per-kind rows — only kinds with at least one matched entry we have.
+  const kindRows: EntryPointFilterOption[] = [];
+  for (const [kind, ids] of summary.byKind) {
+    const intersected = intersect(ids);
+    if (intersected.size === 0) continue;
+    kindRows.push({
+      value: `kind:${kind}`,
+      label: `${ENTRY_KIND_LABEL[kind]} · ${intersected.size}`,
+      count: intersected.size,
+      filter: { type: 'kind', kind },
+    });
+  }
+  // Containers before manifests, then alphabetical by label inside.
+  kindRows.sort((a, b) => {
+    const af = a.filter.type === 'kind' ? entryFamily(a.filter.kind) : 'manifest';
+    const bf = b.filter.type === 'kind' ? entryFamily(b.filter.kind) : 'manifest';
+    if (af !== bf) return af === 'container' ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
+  out.push(...kindRows);
+  return out;
+}
+
+/// Apply a filter to a flat entries list. Stable — preserves caller
+/// order. `'all'` short-circuits to avoid a needless allocation.
+export function filterEntriesByDeclSource<T extends { id: string }>(
+  entries: T[],
+  filter: EntryPointFilter,
+  decls: EntryDecl[],
+): T[] {
+  if (filter.type === 'all') return entries;
+  const summary = summarizeEntryDeclMatches(decls);
+  const allowed = allowedIdsForFilter(filter, summary);
+  if (allowed === null) return entries;
+  return entries.filter((e) => allowed.has(e.id));
+}
+
 export interface RefactorCandidate {
   node_id: string;
   name: string;
