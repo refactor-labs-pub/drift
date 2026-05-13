@@ -29,6 +29,7 @@
 
 use crate::{
     graph::{CallGraph, SymbolId},
+    progress::{NullProgress, Progress},
     SymbolKind,
 };
 use std::collections::HashSet;
@@ -86,10 +87,33 @@ pub fn discover_roots(
     root_dir: &Path,
     opts: &DiscoverOpts,
 ) -> Vec<DiscoveredRoot> {
-    let mut out: Vec<DiscoveredRoot> = graph
-        .symbols
-        .iter()
-        .filter(|(id, sym)| {
+    discover_roots_with_progress(graph, root_dir, opts, &NullProgress)
+}
+
+/// Same as [`discover_roots`] but surfaces per-symbol scan progress.
+///
+/// On a large graph this phase is dominated by `reachable_count`
+/// (a BFS over the call edges for every candidate root). Without the
+/// progress callback the user sees "discovering roots…" stuck on
+/// screen for tens of seconds on a 50k-symbol repo. We emit progress
+/// per processed symbol with the standard 64-symbol throttle.
+pub fn discover_roots_with_progress(
+    graph: &CallGraph,
+    root_dir: &Path,
+    opts: &DiscoverOpts,
+    progress: &dyn Progress,
+) -> Vec<DiscoveredRoot> {
+    let total = graph.symbols.len();
+    progress.step_start("scanning roots", total);
+    // Manual loop instead of the previous iterator chain so we can
+    // emit progress every 64 symbols. The semantics are identical to
+    // the original filter+map+filter pipeline; the chained Vec build
+    // is just unrolled here so the counter is observable.
+    let mut out: Vec<DiscoveredRoot> = Vec::new();
+    for (i, (id, sym)) in graph.symbols.iter().enumerate() {
+        // The body of this closure is a verbatim move of the
+        // pre-progress filter+map block; semantics are unchanged.
+        let keep = (|(id, sym): (&SymbolId, &crate::Symbol)| {
             // Class is a container, not an executable entry.
             if matches!(sym.kind, SymbolKind::Class) {
                 return false;
@@ -105,7 +129,7 @@ pub fn discover_roots(
             // named entry point developers think about.
             let real_caller_count = graph
                 .callers
-                .get(*id)
+                .get(id)
                 .map(|v| {
                     v.iter()
                         .filter(|cid| {
@@ -131,17 +155,23 @@ pub fn discover_roots(
                 return false;
             }
             true
-        })
-        .map(|(id, sym)| {
+        })((id, sym));
+        if keep {
             let reach = reachable_count(graph, id);
-            DiscoveredRoot {
-                id: id.clone(),
-                name: sym.name.clone(),
-                reach,
+            if reach >= opts.min_reach {
+                out.push(DiscoveredRoot {
+                    id: id.clone(),
+                    name: sym.name.clone(),
+                    reach,
+                });
             }
-        })
-        .filter(|r| r.reach >= opts.min_reach)
-        .collect();
+        }
+        if i & 0x3F == 0 {
+            progress.step_progress(i, total);
+        }
+    }
+    progress.step_progress(total, total);
+    progress.step_end();
 
     // Rank: biggest reach first; tie-break by name for stable output.
     out.sort_by(|a, b| b.reach.cmp(&a.reach).then_with(|| a.name.cmp(&b.name)));

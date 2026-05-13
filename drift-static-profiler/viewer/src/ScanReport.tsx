@@ -116,6 +116,19 @@ export function ScanReport({ report, onJump, onShowKind, onPickRoot }: Props) {
 
 // ─── Header ──────────────────────────────────────────────────────────────
 
+/// Render `Generator.captured_at` as a short human-readable date in the
+/// user's locale. Falls back to the raw ISO string if parsing fails so a
+/// malformed value still surfaces something. The full RFC 3339 string is
+/// kept on the element's `title` for hover.
+export function formatCapturedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
 function Header({ report }: { report: Report }) {
   // Pull the active fixture from the URL so we can build a deep link to
   // the dedicated full-page Scan Report at /scan/:fixtureKey/report.
@@ -140,6 +153,14 @@ function Header({ report }: { report: Report }) {
       </div>
       <div style={headerSubStyle}>
         {report.generator?.tool ?? 'drift-static-profiler'} {report.generator?.version ?? ''}
+        {report.generator?.captured_at && (
+          <>
+            {' · '}
+            <span title={report.generator.captured_at}>
+              scanned {formatCapturedAt(report.generator.captured_at)}
+            </span>
+          </>
+        )}
         {' · '}
         {report.summary.profiled_language ?? '—'}
         {report.summary.profiled_language_percent !== undefined && report.summary.profiled_language_percent !== null

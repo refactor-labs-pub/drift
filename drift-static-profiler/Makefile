@@ -21,6 +21,10 @@ RELEASE_BIN  := ./target/release/drift-static-profiler
 VIEWER_DIR   := viewer
 VIEWER_PORT  := 5180
 FIXTURE_OUT  := $(VIEWER_DIR)/public/fixtures
+# User scans (one JSON per scanned folder, named after the folder's basename)
+# land here. The viewer auto-discovers them via scans/index.json. The whole
+# scans/ directory is gitignored — each contributor regenerates locally.
+SCANS_OUT    := $(FIXTURE_OUT)/scans
 
 # Fixture catalog — one row per fixture. Add a row → automatic targets.
 # Format: FIXTURE_<key> := <fixture_dir>  <entry_symbol>
@@ -51,9 +55,9 @@ RESET  := \033[0m
         test-verbose test-python test-java test-ts list-tests \
         demo-python demo-java demo-ts demo-js \
         tags-python tags-java tags-ts tags-js \
-        refresh refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-insights-demo refresh-docker-app viewer-data \
+        refresh refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-kotlin refresh-insights-demo refresh-docker-app viewer-data \
         viewer-bun viewer-stop viewer-install viewer-build \
-        scan scan-roots scan-no-tests scan-roots-no-tests \
+        scan scan-roots scan-no-tests scan-roots-no-tests scans-index \
         diff-demo schema-validate \
         refresh-catalogs extend-catalogs verify-catalogs list-uncategorized \
         sync-otel-registry refresh-from-upstream \
@@ -170,7 +174,7 @@ tags-js: $(BIN) ## Raw tree-sitter tags for the JavaScript fixture
 
 ### Refresh viewer fixtures
 
-refresh: refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-insights-demo refresh-docker-app ## Rerun ALL fixtures through the profiler
+refresh: refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-kotlin refresh-insights-demo refresh-docker-app ## Rerun ALL fixtures through the profiler
 	@printf "$(GREEN)✓$(RESET) all viewer fixtures regenerated from the profiler\n"
 
 refresh-docker-app: $(BIN) ## Regenerate the docker-app fixture (Dockerfile + docker-compose)
@@ -215,6 +219,14 @@ refresh-scala: $(BIN) ## Regenerate the Scala fixture
 	  --out-dir $(FIXTURE_OUT) \
 	  --no-accessors > /dev/null
 	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/scala-play.json\n"
+
+refresh-kotlin: $(BIN) ## Regenerate the Kotlin fixture
+	@mkdir -p $(FIXTURE_OUT)
+	@$(BIN) analyze-root tests/fixtures/kotlin-ktor \
+	  --name kotlin-ktor \
+	  --out-dir $(FIXTURE_OUT) \
+	  --no-accessors > /dev/null
+	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/kotlin-ktor.json\n"
 
 refresh-python: $(BIN) ## Rerun just the Python fixture
 	@mkdir -p $(FIXTURE_OUT)
@@ -266,18 +278,21 @@ viewer-stop: ## Kill whatever is listening on port 5180
 viewer-build: install-viewer refresh ## Production build → viewer/dist/
 	@cd $(VIEWER_DIR) && npm run build
 
-### Custom scan (any path → viewer)
+### Scan any folder → viewer
 
-# Point the profiler at any folder on disk and have the result show up in the
-# viewer as the "Custom Scan" fixture. Override SCAN_PATH, ENTRY, and
-# (optionally) NAME on the command line.
+# Point the profiler at any folder on disk and have the result show up
+# in the viewer as its own entry on the landing page. Each scan writes
+# `viewer/public/fixtures/scans/<name>.json`, where <name> defaults to
+# the BASENAME of SCAN_PATH (so `/Users/me/ktor` → `scans/ktor.json`).
+# Override with NAME=… to pick a different label/filename.
 #
-#   make scan SCAN_PATH=/Users/me/code/myproj ENTRY=handleRequest
-#   make scan SCAN_PATH=../other-repo         ENTRY="createOrder updateOrder"
-#   make scan SCAN_PATH=./some/dir            ENTRY=main NAME=myproj
+#   make scan /Users/me/ktor                  # → scans/ktor.json
+#   make scan SCAN_PATH=../other-repo         # → scans/other-repo.json
+#   make scan SCAN_PATH=./some/dir NAME=myapp # → scans/myapp.json
 #
-# ENTRY accepts a single name OR a space-separated list (quote the value).
-# Then `make viewer` (or refresh your open tab) and choose "Custom Scan".
+# After writing the JSON, the recipe regenerates scans/index.json — a
+# small manifest the viewer fetches at boot to render one card per
+# user-run scan. The whole scans/ directory is gitignored.
 # Allow a positional path: `make scan /abs/path`, `make scan-roots /abs/path`,
 # `make scan-no-tests /abs/path`, etc. Treat any extra goals after scan/
 # scan-roots/scan-no-tests/scan-roots-no-tests as args: first one → SCAN_PATH,
@@ -292,7 +307,10 @@ endif
 
 SCAN_PATH  ?=
 ENTRY      ?=
-NAME       ?= custom
+# Derive NAME from SCAN_PATH's basename (last directory component, with
+# any trailing slash stripped). `?=` keeps explicit NAME=… overrides.
+# Examples: /Users/me/ktor → ktor ; ./code/myproj/ → myproj.
+NAME       ?= $(notdir $(patsubst %/,%,$(SCAN_PATH)))
 
 # `scan` is the "everything" target: it walks the project, auto-
 # discovers every in-degree=0 symbol as a root, and disables every root
@@ -300,9 +318,6 @@ NAME       ?= custom
 # you want the full picture; use `scan-roots` for the curated default
 # discovery; use `scan-no-tests` for the same "everything" view but
 # with test/spec/mock files dropped at the walker stage.
-#
-# Defaults to NAME=custom so it writes the viewer's "Custom Scan"
-# fixture. Override with NAME=… for a separate fixture.
 #
 #   make scan /abs/path
 #   make scan SCAN_PATH=/abs/path NAME=myproj
@@ -314,16 +329,18 @@ scan: $(BIN) ## Scan any folder with ALL root filters off (everything as roots).
 	  printf "        use `make scan-roots` for the curated default (skips tests/private/accessors).\n"; \
 	  exit 1; \
 	fi
-	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters) → $(FIXTURE_OUT)/$(NAME).json\n"
+	@mkdir -p $(SCANS_OUT)
+	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters) → $(SCANS_OUT)/$(NAME).json\n"
 	@$(BIN) analyze-root "$(SCAN_PATH)" \
 	  --name "$(NAME)" \
-	  --out-dir "$(FIXTURE_OUT)" \
+	  --out-dir "$(SCANS_OUT)" \
 	  --min-reach 1 \
 	  --max-roots 5000 \
 	  --include-tests \
 	  --include-private \
 	  --include-accessors \
 	  --print
+	@$(MAKE) --no-print-directory scans-index
 
 # Root-level profile: auto-discover every plausible entry point in a folder
 # (symbols with no in-graph caller, ranked by transitive reach) and profile
@@ -334,11 +351,13 @@ scan: $(BIN) ## Scan any folder with ALL root filters off (everything as roots).
 # pprof's `top -cum`, or Speedscope's Sandwich view.
 #
 #   make scan-roots SCAN_PATH=/Users/me/code/myproj
-#   make scan-roots SCAN_PATH=./some/dir NAME=myproj-roots MIN_REACH=4
+#   make scan-roots SCAN_PATH=./some/dir ROOTS_NAME=myproj-roots MIN_REACH=4
 #
 MIN_REACH  ?= 2
 MAX_ROOTS  ?= 200
-ROOTS_NAME ?= roots
+# Same derivation as NAME: basename of SCAN_PATH. Override with
+# ROOTS_NAME=… if you want a different filename in scans/.
+ROOTS_NAME ?= $(notdir $(patsubst %/,%,$(SCAN_PATH)))
 
 scan-roots: $(BIN) ## Auto-discover root entry points and write a multi-root profile JSON
 	@if [ -z "$(SCAN_PATH)" ]; then \
@@ -346,14 +365,16 @@ scan-roots: $(BIN) ## Auto-discover root entry points and write a multi-root pro
 	  printf "          or: make scan-roots SCAN_PATH=/abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
 	  exit 1; \
 	fi
-	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) → $(FIXTURE_OUT)/$(ROOTS_NAME).json\n"
+	@mkdir -p $(SCANS_OUT)
+	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) → $(SCANS_OUT)/$(ROOTS_NAME).json\n"
 	@$(BIN) analyze-root "$(SCAN_PATH)" \
 	  --name "$(ROOTS_NAME)" \
-	  --out-dir "$(FIXTURE_OUT)" \
+	  --out-dir "$(SCANS_OUT)" \
 	  --min-reach $(MIN_REACH) \
 	  --max-roots $(MAX_ROOTS) \
 	  --no-accessors \
 	  --print
+	@$(MAKE) --no-print-directory scans-index
 
 # `scan-no-tests` is `scan` minus tests: same "everything as roots"
 # semantics (every in-degree=0 symbol qualifies, all filters off), but
@@ -364,9 +385,6 @@ scan-roots: $(BIN) ## Auto-discover root entry points and write a multi-root pro
 # conventions (`*.test.{ts,js}`, `*.spec.*`, `test_*.py`, `*_test.go`,
 # `*Test.java`, `*Spec.scala`, `*.mock.*`).
 #
-# Defaults to NAME=custom so it overwrites the same fixture the
-# viewer's "Custom Scan" tab loads. Override with NAME=…
-#
 #   make scan-no-tests /abs/path
 #   make scan-no-tests SCAN_PATH=/abs/path NAME=myproj-prod
 scan-no-tests: $(BIN) ## Like `scan` (everything as roots) but with test/spec/mock files dropped at the walker stage.
@@ -376,16 +394,18 @@ scan-no-tests: $(BIN) ## Like `scan` (everything as roots) but with test/spec/mo
 	  printf "   tip: same loose discovery as `make scan`, but test/spec/mock files are walked OUT.\n"; \
 	  exit 1; \
 	fi
-	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters, no tests) → $(FIXTURE_OUT)/$(NAME).json\n"
+	@mkdir -p $(SCANS_OUT)
+	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters, no tests) → $(SCANS_OUT)/$(NAME).json\n"
 	@$(BIN) analyze-root "$(SCAN_PATH)" \
 	  --name "$(NAME)" \
-	  --out-dir "$(FIXTURE_OUT)" \
+	  --out-dir "$(SCANS_OUT)" \
 	  --min-reach 1 \
 	  --max-roots 5000 \
 	  --include-private \
 	  --include-accessors \
 	  --no-tests \
 	  --print
+	@$(MAKE) --no-print-directory scans-index
 
 scan-roots-no-tests: $(BIN) ## `make scan-roots` + walker-level filter for test/spec/mock files
 	@if [ -z "$(SCAN_PATH)" ]; then \
@@ -393,15 +413,28 @@ scan-roots-no-tests: $(BIN) ## `make scan-roots` + walker-level filter for test/
 	  printf "          or: make scan-roots-no-tests SCAN_PATH=/abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
 	  exit 1; \
 	fi
-	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) (no tests) → $(FIXTURE_OUT)/$(ROOTS_NAME).json\n"
+	@mkdir -p $(SCANS_OUT)
+	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) (no tests) → $(SCANS_OUT)/$(ROOTS_NAME).json\n"
 	@$(BIN) analyze-root "$(SCAN_PATH)" \
 	  --name "$(ROOTS_NAME)" \
-	  --out-dir "$(FIXTURE_OUT)" \
+	  --out-dir "$(SCANS_OUT)" \
 	  --min-reach $(MIN_REACH) \
 	  --max-roots $(MAX_ROOTS) \
 	  --no-accessors \
 	  --no-tests \
 	  --print
+	@$(MAKE) --no-print-directory scans-index
+
+# Rebuild scans/index.json from the current contents of scans/. The viewer
+# fetches this file at boot to discover user-run scans; browsers can't
+# list directories so we materialize an index. Idempotent.
+#
+# Backed by the `regen-scans-index` subcommand in the profiler binary.
+# Reads only the first 8 KB of each scan to pull `generator.source_root`,
+# so per-file cost is flat regardless of scan size — flat enough that
+# even a 30 GB scan in the directory adds milliseconds, not minutes.
+scans-index: $(BIN) ## (internal) Rebuild viewer/public/fixtures/scans/index.json
+	@$(BIN) regen-scans-index $(SCANS_OUT)
 
 ### Diff & schema
 

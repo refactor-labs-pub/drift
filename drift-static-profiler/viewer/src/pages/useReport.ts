@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { FIXTURES } from '../fixtures';
+import { useUserScans } from '../userScans';
 import type { FixtureSpec, Report } from '../types';
 
 /**
@@ -10,6 +11,12 @@ import type { FixtureSpec, Report } from '../types';
  * Reads `:fixtureKey` from the route, fetches the matching JSON with
  * `cache: 'no-store'` (so `make refresh` is immediately visible), and
  * returns the parsed `Report` plus the resolved `FixtureSpec`.
+ *
+ * Fixture resolution checks the built-in `FIXTURES` array first, then
+ * falls back to user scans from `/fixtures/scans/index.json` (populated
+ * by `make scan`). While the user-scan list is still loading, the hook
+ * stays in `loading: true` rather than erroring out — otherwise a hard
+ * refresh on a user-scan URL would briefly show "unknown fixture".
  */
 export function useReport(): {
   report: Report | null;
@@ -19,7 +26,10 @@ export function useReport(): {
   loading: boolean;
 } {
   const { fixtureKey } = useParams<{ fixtureKey: string }>();
-  const fixture = fixtureKey ? FIXTURES.find((f) => f.key === fixtureKey) ?? null : null;
+  const { scans: userScans, loading: scansLoading } = useUserScans();
+  const builtIn = fixtureKey ? FIXTURES.find((f) => f.key === fixtureKey) : undefined;
+  const fromScans = fixtureKey ? userScans.find((f) => f.key === fixtureKey) : undefined;
+  const fixture = builtIn ?? fromScans ?? null;
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,7 +37,11 @@ export function useReport(): {
   useEffect(() => {
     setError(null);
     setReport(null);
+    // Wait for the user-scans index before deciding the key is unknown —
+    // otherwise a direct hit on `/scan/ktor/report` would error during
+    // the index fetch.
     if (!fixture) {
+      if (scansLoading) return;
       setError(fixtureKey ? `unknown fixture: ${fixtureKey}` : 'no fixture key in URL');
       return;
     }
@@ -37,7 +51,7 @@ export function useReport(): {
       .then((data: Report) => setReport(data))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [fixture?.json, fixtureKey]);
+  }, [fixture?.json, fixtureKey, scansLoading]);
 
   return { report, fixture, fixtureKey: fixtureKey ?? null, error, loading };
 }

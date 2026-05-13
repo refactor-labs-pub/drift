@@ -1,10 +1,33 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use drift_static_profiler::{
-    analyze, analyze_roots, compute_language_stats, tags::extract_tags, tree::render_ascii,
-    walker::discover_source_files, AnalyzeOptions, DiscoverOpts, LanguageStats,
+    analyze, analyze_roots_with_progress, analyze_with_progress, compute_language_stats,
+    tags::extract_tags, tree::render_ascii, walker::discover_source_files, AnalyzeOptions,
+    CliProgress, DiscoverOpts, LanguageStats, NullProgress, Progress,
 };
 use std::path::PathBuf;
+
+/// Pick the progress sink for the CLI context.
+///
+/// `CliProgress` is backed by `indicatif::MultiProgress`, which:
+///   - draws live bars only when stderr is a TTY,
+///   - silently skips bar redraws on non-TTY (CI / pipe / log
+///     capture), but still routes per-phase `✓ <label> in Xs`
+///     completion lines through `eprintln!` via the `commit_line`
+///     helper, so log-shaped output stays informative.
+///
+/// We therefore use `CliProgress` unconditionally — no `IsTerminal`
+/// gate — unless the user explicitly opts out via `DRIFT_PROGRESS=off`.
+/// That env var is the escape hatch for "I really want no output at
+/// all even though I'm on a TTY" (rare but useful for clean script
+/// composition).
+fn pick_progress() -> Box<dyn Progress> {
+    if std::env::var("DRIFT_PROGRESS").as_deref() == Ok("off") {
+        Box::new(NullProgress)
+    } else {
+        Box::new(CliProgress::new())
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "drift-static-profiler", version, about = "Static call-tree analyzer")]
@@ -131,6 +154,21 @@ enum Cmd {
         #[arg(long)]
         print: bool,
     },
+    /// Rebuild the scans index used by the viewer's landing page.
+    ///
+    /// Walks `<dir>` for `*.json` files (excluding `index.json` itself),
+    /// extracts `generator.source_root` from each scan's PREFIX (no full
+    /// parse — see `scans_index::extract_source_root`), and writes
+    /// `<dir>/index.json` atomically.
+    ///
+    /// Example:
+    ///   drift-static-profiler regen-scans-index viewer/public/fixtures/scans
+    RegenScansIndex {
+        /// Directory holding the scan JSONs. Defaults to the viewer's
+        /// scans fixture dir relative to the current working directory.
+        #[arg(default_value = "viewer/public/fixtures/scans")]
+        dir: PathBuf,
+    },
     /// Compare two report JSONs (baseline vs current). Exit non-zero if regressions found.
     Diff {
         baseline: PathBuf,
@@ -156,6 +194,7 @@ fn main() -> Result<()> {
             no_tests,
         } => run_analyze(&path, &entry, json, max_depth, no_accessors, no_tests),
         Cmd::Tags { path } => run_tags(&path),
+        Cmd::RegenScansIndex { dir } => run_regen_scans_index(&dir),
         Cmd::Diff {
             baseline,
             current,
@@ -286,7 +325,8 @@ fn run_scan(
     no_tests: bool,
     print: bool,
 ) -> Result<()> {
-    let outcome = analyze(
+    let progress = pick_progress();
+    let outcome = analyze_with_progress(
         root,
         entries,
         &AnalyzeOptions {
@@ -294,22 +334,23 @@ fn run_scan(
             skip_accessors: no_accessors,
             exclude_tests: no_tests,
         },
+        progress.as_ref(),
     )?;
+    // Serialize + write are the last two phases of the scan from the
+    // user's perspective: `serde_json::to_string_pretty` on a 700-
+    // entry report can take a couple of seconds, and writing the
+    // resulting (possibly 100MB+) JSON to disk is non-trivial too.
+    // Both used to be silent — surface them so the user sees the
+    // overall bar reach its final phases instead of hanging.
+    write_report_with_progress(&outcome, name, out_dir, progress.as_ref())?;
+    progress.finish();
+
     print_language_summary(&outcome.language_stats);
     for q in &outcome.unresolved_entries {
         eprintln!("warn: no symbol matched entry {q:?}");
     }
-
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("create output dir {}", out_dir.display()))?;
-    let out_path = out_dir.join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(&outcome.report).context("serialize")?;
-    std::fs::write(&out_path, &json)
-        .with_context(|| format!("write report to {}", out_path.display()))?;
-
     eprintln!(
-        "✓ wrote {} ({} entries, {} symbols)",
-        out_path.display(),
+        "✓ wrote viewer/public/fixtures/{name}.json ({} entries, {} symbols)",
         outcome.report.entries.len(),
         outcome.report.summary.symbols,
     );
@@ -322,6 +363,60 @@ fn run_scan(
             println!("{}", render_ascii(r));
         }
     }
+    Ok(())
+}
+
+/// Serialize the report to pretty JSON and stream it to disk via a
+/// `BufWriter`, with a single `phase()` label so the CLI's overall
+/// bar surfaces the work. Shared between `run_scan` and
+/// `run_analyze_root` because both have the identical write tail.
+///
+/// Why streaming (vs. the old `to_string_pretty` + `fs::write`):
+///   - `to_string_pretty` serializes the WHOLE report into a `String`
+///     before any bytes hit disk. On a large polyglot scan that's a
+///     100MB+ allocation that lives alongside the report's own
+///     in-memory structures — easy to push peak RSS past 1 GB.
+///   - `to_writer_pretty` walks the serde tree and pushes bytes
+///     directly through the writer. With a 256 KB-buffered
+///     `BufWriter` in front of the file we get amortized 256 KB
+///     syscalls instead of one monolithic `fs::write`. Net effect:
+///     same wall time on small reports, and **no double-buffer
+///     memory cost on big ones**.
+///
+/// One phase, not two: serialize and write are interleaved by the
+/// streaming path (serde produces bytes → BufWriter accumulates →
+/// flushes at 256 KB boundaries → disk). The user can't meaningfully
+/// separate "CPU-bound serialize" from "IO-bound write" anymore, so
+/// we surface a single combined `writing …` phase. If the merged
+/// timing ever masks a slow regression we can split it apart again,
+/// but with streaming the wall-clock IS one timer.
+fn write_report_with_progress(
+    outcome: &drift_static_profiler::AnalyzeOutcome,
+    name: &str,
+    out_dir: &std::path::Path,
+    progress: &dyn Progress,
+) -> Result<()> {
+    use std::io::{BufWriter, Write};
+
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("create output dir {}", out_dir.display()))?;
+    let out_path = out_dir.join(format!("{name}.json"));
+
+    progress.phase(&format!("writing {}…", out_path.display()));
+    // BufWriter capacity: 256 KB. Default is 8 KB which means lots of
+    // syscalls on a 100MB+ JSON. 256 KB hits a sweet spot for the
+    // standard fs read-ahead size on macOS / Linux without being
+    // wasteful for small reports (the buffer is freed on drop).
+    let file = std::fs::File::create(&out_path)
+        .with_context(|| format!("create report file {}", out_path.display()))?;
+    let mut writer = BufWriter::with_capacity(256 * 1024, file);
+    serde_json::to_writer_pretty(&mut writer, &outcome.report).context("serialize")?;
+    // Flush the BufWriter before closing so a partial write surfaces
+    // as an io::Error here, not as a silently-truncated JSON file
+    // discovered later by the viewer.
+    writer
+        .flush()
+        .with_context(|| format!("flush report to {}", out_path.display()))?;
     Ok(())
 }
 
@@ -352,7 +447,8 @@ fn run_analyze_root(
         skip_accessors: !include_accessors,
         max_roots,
     };
-    let outcome = analyze_roots(
+    let progress = pick_progress();
+    let outcome = analyze_roots_with_progress(
         root,
         &discover,
         &AnalyzeOptions {
@@ -360,24 +456,22 @@ fn run_analyze_root(
             skip_accessors: no_accessors,
             exclude_tests: no_tests,
         },
+        progress.as_ref(),
     )?;
-    print_language_summary(&outcome.language_stats);
+    // Same write tail as run_scan — the JSON serialize + disk write
+    // are the last visible phases of the scan and used to be silent.
+    write_report_with_progress(&outcome, name, out_dir, progress.as_ref())?;
+    progress.finish();
 
+    print_language_summary(&outcome.language_stats);
     eprintln!(
         "discovered {} root entry points (min_reach={min_reach}, max_roots={max_roots})",
         outcome.discovered_roots.len(),
     );
-
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("create output dir {}", out_dir.display()))?;
-    let out_path = out_dir.join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(&outcome.report).context("serialize")?;
-    std::fs::write(&out_path, &json)
-        .with_context(|| format!("write report to {}", out_path.display()))?;
-
     eprintln!(
-        "✓ wrote {} ({} entries, {} symbols)",
-        out_path.display(),
+        "✓ wrote {}/{}.json ({} entries, {} symbols)",
+        out_dir.display(),
+        name,
         outcome.report.entries.len(),
         outcome.report.summary.symbols,
     );
@@ -391,6 +485,17 @@ fn run_analyze_root(
             eprintln!("  {:>3}. {:<32} reach={}", i + 1, r.name, r.reach);
         }
     }
+    Ok(())
+}
+
+fn run_regen_scans_index(dir: &std::path::Path) -> Result<()> {
+    let count = drift_static_profiler::scans_index::regen(dir)
+        .with_context(|| format!("regenerate scans index in {}", dir.display()))?;
+    let plural = if count == 1 { "" } else { "s" };
+    eprintln!(
+        "  ↻ wrote {}/index.json ({count} scan{plural})",
+        dir.display(),
+    );
     Ok(())
 }
 

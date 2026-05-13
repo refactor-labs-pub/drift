@@ -22,7 +22,7 @@ import type {
   RootOverview,
   Severity,
 } from '../types';
-import { filterAndSortEntries } from '../ScanReport';
+import { filterAndSortEntries, formatCapturedAt } from '../ScanReport';
 import { flattenFindings, useReport } from './useReport';
 
 /**
@@ -126,6 +126,13 @@ export function ScanReportPage() {
           />
           {report.generator?.tool && (
             <Meta k="generator" v={`${report.generator.tool} ${report.generator.version ?? ''}`.trim()} />
+          )}
+          {report.generator?.captured_at && (
+            <Meta
+              k="scanned"
+              v={formatCapturedAt(report.generator.captured_at)}
+              titleAttr={report.generator.captured_at}
+            />
           )}
         </div>
       </section>
@@ -471,7 +478,9 @@ function RootRow({ root, fixtureKey }: { root: RootOverview; fixtureKey: string 
 
 // ─── Header subcomponents ───────────────────────────────────────────────
 
-function Meta({ k, v, link }: { k: string; v: string; link?: string }) {
+function Meta({
+  k, v, link, titleAttr,
+}: { k: string; v: string; link?: string; titleAttr?: string }) {
   const body = (
     <>
       <span style={metaKeyStyle}>{k}</span>
@@ -480,12 +489,12 @@ function Meta({ k, v, link }: { k: string; v: string; link?: string }) {
   );
   if (link) {
     return (
-      <Link to={link} style={{ ...metaStyle, textDecoration: 'none' }} title={`Open ${k}`}>
+      <Link to={link} style={{ ...metaStyle, textDecoration: 'none' }} title={titleAttr ?? `Open ${k}`}>
         {body}
       </Link>
     );
   }
-  return <div style={metaStyle}>{body}</div>;
+  return <div style={metaStyle} title={titleAttr}>{body}</div>;
 }
 
 // ─── Health card ────────────────────────────────────────────────────────

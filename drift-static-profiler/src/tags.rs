@@ -1,10 +1,83 @@
+use crate::progress::Progress;
 use crate::{
     metrics, parser, FileTags, ImportRecord, Language, Reference, Symbol, SymbolKind,
 };
 use anyhow::{Context, Result};
+use rayon::prelude::*;
+use std::cell::RefCell;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+
+// ── Per-thread tree-sitter cache ─────────────────────────────────────────
+//
+// Why this exists: `Query::new(&ts_lang, query_text)` is expensive — it
+// compiles the s-expression query into the matcher's bytecode every
+// call. The old per-file path paid that cost on every parse, which on a
+// 50 000-file repo amounted to ~50 000 query-compiles. `Parser::new` +
+// `set_language` also do non-trivial setup.
+//
+// The fix is a `thread_local!` cache keyed by Language:
+//   - One `Parser` per thread (reused; `set_language` cost amortizes).
+//   - One `Query` per `(thread, language)` pair (compiled lazily,
+//     reused for the lifetime of the thread).
+//
+// `RefCell` is fine here because the cache lives on the thread that
+// holds it — there's no cross-thread borrowing. Rayon's worker threads
+// each get their own copy of the thread-local; the cache size is
+// `parallelism × supported_languages` (≈ 8 × 8 = 64 small structs).
+type QueryCache = [Option<Query>; LANG_COUNT];
+
+const LANG_COUNT: usize = 8; // Python/Java/TS/JS/Go/Rust/Scala/Kotlin
+
+fn lang_index(lang: Language) -> usize {
+    // Stable manual mapping. We could derive it from a num crate but
+    // a 7-line match is clearer and keeps the dep list smaller.
+    match lang {
+        Language::Python => 0,
+        Language::Java => 1,
+        Language::TypeScript => 2,
+        Language::JavaScript => 3,
+        Language::Go => 4,
+        Language::Rust => 5,
+        Language::Scala => 6,
+        Language::Kotlin => 7,
+    }
+}
+
+thread_local! {
+    static TS_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
+    static TS_QUERY_CACHE: RefCell<QueryCache> = const {
+        RefCell::new([None, None, None, None, None, None, None, None])
+    };
+}
+
+/// Run a closure with a parser configured for `lang` and a pre-compiled
+/// query for that language, both pulled from the thread-local cache.
+/// The closure runs INSIDE the borrows so we don't violate
+/// RefCell's `BorrowMut` rules under nested calls.
+fn with_cached_parser<R>(
+    lang: Language,
+    f: impl FnOnce(&mut Parser, &Query) -> Result<R>,
+) -> Result<R> {
+    let ts_lang = parser::language_for(lang);
+    TS_PARSER.with(|p_cell| {
+        let mut p = p_cell.borrow_mut();
+        p.set_language(&ts_lang).context("set_language")?;
+        TS_QUERY_CACHE.with(|qc_cell| {
+            let mut qc = qc_cell.borrow_mut();
+            let idx = lang_index(lang);
+            if qc[idx].is_none() {
+                let q = Query::new(&ts_lang, parser::tags_query(lang))
+                    .context("compile query")?;
+                qc[idx] = Some(q);
+            }
+            let q = qc[idx].as_ref().expect("just inserted");
+            f(&mut p, q)
+        })
+    })
+}
 
 pub fn extract_tags(path: &Path, lang: Language) -> Result<FileTags> {
     let source = fs::read_to_string(path)
@@ -12,19 +85,75 @@ pub fn extract_tags(path: &Path, lang: Language) -> Result<FileTags> {
     extract_tags_from_source(path, lang, &source)
 }
 
+/// Parse and tag every file in `files` in parallel using rayon's
+/// worker pool, reporting completion progress via `progress`.
+///
+/// Errors per file are logged to stderr (same behavior as the legacy
+/// sequential path) so one corrupt file doesn't fail the whole scan.
+/// Result ordering matches the input order so downstream code that
+/// joins by index keeps working — rayon's `par_iter().map(...).collect()`
+/// preserves input order even though work happens out-of-order.
+///
+/// Memory shape: peak working-set is `parallelism * largest_file_bytes`
+/// for the loaded source strings (rayon's scheduler doesn't queue more
+/// than N reads ahead of N workers). The output Vec is built incrementally
+/// without an intermediate Result vec since errors are logged-and-skipped.
+pub fn extract_tags_for_files(
+    files: &[(PathBuf, Language)],
+    progress: &dyn Progress,
+) -> Vec<FileTags> {
+    let total = files.len();
+    progress.parse_start(total);
+    let done = AtomicUsize::new(0);
+    let tags: Vec<Option<FileTags>> = files
+        .par_iter()
+        .map(|(path, lang)| {
+            // tqdm-style "current file" indicator. Setting BEFORE the
+            // parse means the user sees what's being processed right
+            // now, not what was last completed. Last-writer-wins
+            // under rayon — fine for human-readable display, matches
+            // tqdm's `set_postfix` convention.
+            progress.set_current(&path.display().to_string());
+            let res = extract_tags(path, *lang);
+            // Reporting is debounced inside the sink (indicatif's
+            // own draw thread); calling on every file here is fine,
+            // even at high core counts.
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.parse_progress(n, total);
+            match res {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("warn: failed to parse {}: {e:#}", path.display());
+                    None
+                }
+            }
+        })
+        .collect();
+    progress.parse_end();
+    tags.into_iter().flatten().collect()
+}
+
 pub fn extract_tags_from_source(
     path: &Path,
     lang: Language,
     source: &str,
 ) -> Result<FileTags> {
-    let ts_lang = parser::language_for(lang);
-    let mut parser = Parser::new();
-    parser.set_language(&ts_lang).context("set_language")?;
+    with_cached_parser(lang, |parser, query| {
+        extract_tags_inner(path, lang, source, parser, query)
+    })
+}
+
+fn extract_tags_inner(
+    path: &Path,
+    lang: Language,
+    source: &str,
+    parser: &mut Parser,
+    query: &Query,
+) -> Result<FileTags> {
     let tree = parser
         .parse(source, None)
         .context("tree-sitter parse returned None")?;
 
-    let query = Query::new(&ts_lang, parser::tags_query(lang)).context("compile query")?;
     let mut cursor = QueryCursor::new();
 
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -32,7 +161,7 @@ pub fn extract_tags_from_source(
     let mut imports: Vec<ImportRecord> = Vec::new();
 
     let capture_names = query.capture_names();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
         let mut def_name: Option<&str> = None;
         let mut def_node: Option<Node> = None;

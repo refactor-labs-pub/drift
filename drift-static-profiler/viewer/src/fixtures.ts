@@ -55,10 +55,9 @@ export const FIXTURES: FixtureSpec[] = [
     json: '/fixtures/insights-demo.json',
     description: 'Synthetic Python file with N+1, blocking-in-async, and mutual recursion — to exercise the Insights + Scan Report pages',
   },
-  {
-    key: 'custom',
-    label: 'Custom Scan',
-    json: '/fixtures/custom.json',
-    description: 'Output of `make scan /path` — auto-discovers roots if ENTRY is omitted; viewer auto-reloads when the file changes',
-  },
 ];
+// Note: the legacy `custom` fixture was removed when scans moved into
+// their own per-folder layout under viewer/public/fixtures/scans/. Each
+// `make scan /Users/me/foo` now writes `scans/foo.json` and registers
+// it in `scans/index.json`; the viewer picks those up via
+// `loadUserScans()` in `userScans.ts`.

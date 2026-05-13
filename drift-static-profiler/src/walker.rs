@@ -1,3 +1,4 @@
+use crate::progress::{NullProgress, Progress};
 use crate::Language;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
@@ -247,11 +248,64 @@ pub fn discover_source_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf,
 /// [`discover_source_files_with`], but WITHOUT filtering by language. Returns
 /// `(path, byte_len)` per file.
 ///
-/// This is the entry point the linguist-style byte counter uses: it needs to
-/// see *all* source-shaped files (including Rust, Go, etc. we don't profile)
-/// so the language percentages it computes reflect the whole repo, not just
-/// the languages whose tree-sitter parsers we ship.
+/// Thin wrapper over [`walk_files_classified_with`] that drops the
+/// classification columns. Kept for backward compatibility with library
+/// consumers and the linguist's standalone `compute_language_stats`
+/// path. New orchestration code (api.rs) should call the classified
+/// variant directly so the linguist breakdown and source-discovery
+/// share a single filesystem walk.
 pub fn walk_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, u64)> {
+    walk_files_classified_with(root, opts, &NullProgress)
+        .into_iter()
+        .map(|f| (f.path, f.size))
+        .collect()
+}
+
+/// One entry per file the walker emits, pre-classified with linguist
+/// metadata so downstream consumers don't need a second walk to
+/// recover the language tag.
+///
+/// Fields are pub(crate): the type is an internal coordination shape
+/// between `walker`, `linguist`, and `api`; library consumers stay on
+/// the simpler `Vec<(PathBuf, Language)>` / `Vec<(PathBuf, u64)>` APIs.
+#[derive(Debug, Clone)]
+pub struct ClassifiedFile {
+    pub path: PathBuf,
+    pub size: u64,
+    /// Linguist-style display name (e.g. "Python", "TypeScript",
+    /// "Kotlin"). `None` for files that don't match any known
+    /// extension/filename — those still appear in the walk output so
+    /// callers can decide how to treat them, but they don't contribute
+    /// to the language bar.
+    pub(crate) lang_name: Option<&'static str>,
+    /// Linguist bucket — only `Programming` files contribute to the
+    /// language percentage denominator. `None` mirrors `lang_name`.
+    pub(crate) lang_kind: Option<crate::linguist::LangKind>,
+    /// Drift's tree-sitter parser variant for this file. Populated only
+    /// for files we can actually profile; `None` means the file is
+    /// counted in the linguist bar (if it's a known programming language)
+    /// but skipped by source discovery.
+    pub language: Option<Language>,
+}
+
+/// One-pass walk that classifies each file as it's discovered.
+///
+/// Replaces the legacy two-walk pattern in the orchestrator: the old
+/// `compute_language_stats` and `discover_source_files_with` each
+/// traversed the filesystem independently — for a large monorepo,
+/// that's twice the inode reads and twice the gitignore evaluation.
+/// This variant yields all the data both phases need in a single
+/// pass, and emits `Progress::walk_progress` checkpoints so the CLI
+/// can show "scanning… N files" while it runs.
+///
+/// Progress checkpoint cadence: every 256 files. Fine-grained enough
+/// to feel responsive on slow filesystems, coarse enough that the
+/// callback overhead is irrelevant.
+pub fn walk_files_classified_with(
+    root: &Path,
+    opts: &WalkOpts,
+    progress: &dyn Progress,
+) -> Vec<ClassifiedFile> {
     let mut wb = WalkBuilder::new(root);
 
     // `standard_filters(true)` is a shortcut that enables:
@@ -274,7 +328,9 @@ pub fn walk_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, u64)> {
         wb.add_custom_ignore_filename(".driftignore");
     }
 
-    let mut out = Vec::new();
+    progress.walk_start();
+    let mut out: Vec<ClassifiedFile> = Vec::new();
+    let mut total_bytes: u64 = 0;
     for entry in wb.build().flatten() {
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
@@ -287,8 +343,28 @@ pub fn walk_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, u64)> {
             continue;
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        out.push((path.to_path_buf(), size));
+        // Single dispatch: `classify` already maps the extension to
+        // both the linguist name+kind AND the supported `Language` (when
+        // we ship a parser for it). Reading `info.supported` here
+        // instead of calling `Language::from_path` avoids duplicating
+        // the extension→language match in two places.
+        let info = crate::linguist::classify(path);
+        out.push(ClassifiedFile {
+            path: path.to_path_buf(),
+            size,
+            lang_name: info.map(|i| i.name),
+            lang_kind: info.map(|i| i.kind),
+            language: info.and_then(|i| i.supported),
+        });
+        total_bytes += size;
+        // Throttled progress: 256-file granularity. Walker is single-
+        // threaded today (`ignore::Walk` rather than `WalkParallel`),
+        // so this is the only hot loop pushing walk_progress events.
+        if out.len() & 0xFF == 0 {
+            progress.walk_progress(out.len());
+        }
     }
+    progress.walk_end(out.len(), total_bytes);
     out
 }
 

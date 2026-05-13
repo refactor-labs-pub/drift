@@ -22,10 +22,7 @@
 //! modelines, and content classifiers). For our "which language dominates
 //! this checkout" question the simpler approach is enough.
 
-use crate::{
-    walker::{walk_files_with, WalkOpts},
-    Language,
-};
+use crate::{walker::WalkOpts, Language};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -39,17 +36,24 @@ pub enum LangKind {
     Prose,
 }
 
+/// Output of [`classify`] — a path's linguist-style language tag plus
+/// whether drift ships a tree-sitter parser for it.
+///
+/// `pub(crate)` so the one-pass walker (`walker::walk_files_classified_with`)
+/// can capture this once per file and hand the same struct to both the
+/// linguist breakdown and the source-discovery filter, eliminating the
+/// second filesystem walk we used to perform.
 #[derive(Debug, Clone, Copy)]
-struct LangInfo {
-    name: &'static str,
-    kind: LangKind,
+pub(crate) struct LangInfo {
+    pub(crate) name: &'static str,
+    pub(crate) kind: LangKind,
     /// Set when this language has a tree-sitter parser shipped in this
     /// crate (i.e. drift can actually profile it). Used to pick the
     /// dominant *supported* language.
-    supported: Option<Language>,
+    pub(crate) supported: Option<Language>,
 }
 
-fn classify(path: &Path) -> Option<LangInfo> {
+pub(crate) fn classify(path: &Path) -> Option<LangInfo> {
     let fname = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -94,6 +98,7 @@ fn classify_extension(ext: &str) -> Option<LangInfo> {
         "rs" => ("Rust", LangKind::Programming, Some(Language::Rust)),
         "go" => ("Go", LangKind::Programming, Some(Language::Go)),
         "scala" | "sc" => ("Scala", LangKind::Programming, Some(Language::Scala)),
+        "kt" | "kts" => ("Kotlin", LangKind::Programming, Some(Language::Kotlin)),
 
         // ── programming (other) ──────────────────────────────────────────
         "rb" => ("Ruby", LangKind::Programming, None),
@@ -101,7 +106,6 @@ fn classify_extension(ext: &str) -> Option<LangInfo> {
         "c" | "h" => ("C", LangKind::Programming, None),
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => ("C++", LangKind::Programming, None),
         "cs" => ("C#", LangKind::Programming, None),
-        "kt" | "kts" => ("Kotlin", LangKind::Programming, None),
         "swift" => ("Swift", LangKind::Programming, None),
         "sh" | "bash" | "zsh" | "fish" => ("Shell", LangKind::Programming, None),
         "ps1" => ("PowerShell", LangKind::Programming, None),
@@ -180,6 +184,31 @@ pub fn compute_language_stats(root: &Path) -> LanguageStats {
 }
 
 pub fn compute_language_stats_with(root: &Path, opts: &WalkOpts) -> LanguageStats {
+    // Single-walk path: defer to the classified walker, then aggregate.
+    // Keeps this entry point usable for callers who don't have a
+    // ClassifiedFile vec already (the CLI's `tags` subcommand, library
+    // consumers).
+    let entries = crate::walker::walk_files_classified_with(
+        root,
+        opts,
+        &crate::progress::NullProgress,
+    );
+    compute_language_stats_from_entries(&entries)
+}
+
+/// Aggregate a pre-classified file list into a [`LanguageStats`].
+///
+/// Used by the orchestrator (`api::build_graph_context`) so the same
+/// classified vector built by `walker::walk_files_classified_with`
+/// feeds both the language breakdown AND the source-file filter — no
+/// duplicate filesystem walk.
+///
+/// Programming-only: data/markup/prose buckets and unclassified files
+/// (`lang_name = None`) are dropped from the percentage denominator,
+/// matching the original `compute_language_stats_with` semantics.
+pub fn compute_language_stats_from_entries(
+    entries: &[crate::walker::ClassifiedFile],
+) -> LanguageStats {
     #[derive(Default)]
     struct Bucket {
         bytes: u64,
@@ -191,19 +220,25 @@ pub fn compute_language_stats_with(root: &Path, opts: &WalkOpts) -> LanguageStat
     let mut total_bytes: u64 = 0;
     let mut total_files: usize = 0;
 
-    for (path, size) in walk_files_with(root, opts) {
-        let Some(info) = classify(&path) else { continue };
+    for f in entries {
+        let (Some(name), Some(kind)) = (f.lang_name, f.lang_kind) else {
+            continue;
+        };
         // Only programming files contribute to the bar — JSON fixtures and
         // README.md should not dilute the percentage of the language we'll
         // actually profile.
-        if !matches!(info.kind, LangKind::Programming) {
+        if !matches!(kind, LangKind::Programming) {
             continue;
         }
-        let b = buckets.entry(info.name).or_default();
-        b.bytes += size;
+        let b = buckets.entry(name).or_default();
+        b.bytes += f.size;
         b.files += 1;
-        b.supported = info.supported;
-        total_bytes += size;
+        // Every file with the same `lang_name` carries the same
+        // `language` (it's a property of the extension/filename, not
+        // the file), so writing it repeatedly is idempotent. We could
+        // skip the write after the first; not worth the branch.
+        b.supported = f.language;
+        total_bytes += f.size;
         total_files += 1;
     }
 
@@ -320,6 +355,8 @@ mod tests {
             ("lib.rs", Language::Rust),
             ("App.scala", Language::Scala),
             ("worksheet.sc", Language::Scala),
+            ("Main.kt", Language::Kotlin),
+            ("build.kts", Language::Kotlin),
         ] {
             let li = classify(Path::new(path))
                 .unwrap_or_else(|| panic!("classify failed for {path}"));
@@ -349,22 +386,40 @@ mod tests {
 
     #[test]
     fn dominant_supported_prefers_largest_supported_even_when_unsupported_dominates() {
-        // Kotlin dominates by bytes (unsupported by drift) but TypeScript is
-        // the largest *supported* language, so TS must win.
-        let root = tmp_dir("kotlin-vs-ts");
+        // Swift dominates by bytes (no tree-sitter parser shipped) but
+        // TypeScript is the largest *supported* language, so TS must win.
+        let root = tmp_dir("swift-vs-ts");
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/big.kt"), vec![b'x'; 10_000]).unwrap();
+        fs::write(root.join("src/big.swift"), vec![b'x'; 10_000]).unwrap();
         fs::write(root.join("src/small.ts"), vec![b'x'; 1_000]).unwrap();
         fs::write(root.join("src/tiny.py"), vec![b'x'; 100]).unwrap();
 
         let stats = compute_language_stats(&root);
         assert_eq!(stats.dominant_supported, Some(Language::TypeScript));
-        // Breakdown ordering: Kotlin first by bytes, then TypeScript, then Python.
+        // Breakdown ordering: Swift first by bytes, then TypeScript, then Python.
         let names: Vec<&str> = stats.breakdown.iter().map(|e| e.language.as_str()).collect();
-        assert_eq!(names, vec!["Kotlin", "TypeScript", "Python"]);
+        assert_eq!(names, vec!["Swift", "TypeScript", "Python"]);
         // Percentages sum to ~100.
         let sum: f64 = stats.breakdown.iter().map(|e| e.percent).sum();
         assert!((sum - 100.0).abs() < 1e-6, "percentages should sum to 100, got {sum}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dominant_supported_picks_kotlin_when_largest_supported() {
+        // Kotlin now ships a parser — a Kotlin-heavy repo should be
+        // profiled by drift directly. (Regression guard mirroring the
+        // Rust test above so a future regression that drops the Kotlin
+        // entry from `classify_extension` is caught here.)
+        let root = tmp_dir("kotlin-dominant");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/App.kt"), vec![b'x'; 5_000]).unwrap();
+        fs::write(root.join("src/legacy.py"), vec![b'x'; 1_000]).unwrap();
+
+        let stats = compute_language_stats(&root);
+        assert_eq!(stats.dominant_supported, Some(Language::Kotlin));
+        assert_eq!(stats.dominant_supported_name.as_deref(), Some("Kotlin"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -388,10 +443,10 @@ mod tests {
 
     #[test]
     fn dominant_supported_is_none_when_no_supported_lang_present() {
-        // Use Lua + Kotlin — both unsupported.
+        // Use Lua + Swift — both still unsupported by drift.
         let root = tmp_dir("no-supported");
         fs::write(root.join("a.lua"), "print(1)").unwrap();
-        fs::write(root.join("b.kt"), "fun main() {}").unwrap();
+        fs::write(root.join("b.swift"), "func main() {}").unwrap();
 
         let stats = compute_language_stats(&root);
         assert!(stats.dominant_supported.is_none());

@@ -31,5 +31,10 @@ perf.data.old
 flamegraph.svg
 
 # Local scan output — each contributor regenerates this against their own
-# workspace via `make scan`; not meant to be shared in git.
+# workspace via `make scan /path`; not meant to be shared in git. The
+# whole scans/ subfolder is ignored (one JSON per scanned folder, plus
+# the auto-generated index.json the viewer reads at boot).
+viewer/public/fixtures/scans/
+# Legacy single-file path from before the per-folder scans/ layout; left
+# here so old workspaces don't accidentally commit a stale custom.json.
 viewer/public/fixtures/custom.json

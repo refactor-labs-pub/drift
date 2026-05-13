@@ -879,6 +879,42 @@ fn scala_fixture_handler_reaches_repo_save_with_db_category() {
 }
 
 #[test]
+fn kotlin_fixture_handler_reaches_repo_save_with_db_category() {
+    use drift_static_profiler::{analyze, AnalyzeOptions};
+    banner("kotlin_fixture_handler_reaches_repo_save_with_db_category", "kotlin-ktor");
+    let root = fixture("kotlin-ktor");
+    let outcome = analyze(
+        &root,
+        &["createOrder".into()],
+        &AnalyzeOptions::default(),
+    )
+    .expect("analyze");
+    let report = &outcome.report;
+    assert_eq!(outcome.profiled_language, Some(drift_static_profiler::Language::Kotlin));
+    assert!(report.summary.languages.iter().any(|l| l == "kotlin"));
+    // OrdersRepository.save uses `conn.prepareStatement(...).executeUpdate()` with
+    // `import java.sql.Connection`. Either Tier B (java.sql module) or Tier C
+    // (`conn` receiver pattern) is enough to classify the call site as DB, and
+    // either should propagate up the createOrder → save subtree.
+    let total_db = report
+        .summary
+        .categories
+        .get("db")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        total_db > 0,
+        "expected db>0 from java.sql Connection calls inside repo.save; categories={:?}",
+        report.summary.categories
+    );
+    let has_save = report
+        .entries
+        .iter()
+        .any(|e| names_in_subtree(e).iter().any(|n| n == "save"));
+    assert!(has_save, "save method should appear in the Kotlin call tree");
+}
+
+#[test]
 fn report_json_validates_against_schema_for_each_new_language() {
     // End-to-end schema conformance: emit the JSON for each new-language
     // fixture, parse the published schema, and assert the JSON matches.
@@ -904,6 +940,7 @@ fn report_json_validates_against_schema_for_each_new_language() {
         ("go-gin", "CreateOrder"),
         ("rust-axum", "create_order"),
         ("scala-play", "createOrder"),
+        ("kotlin-ktor", "createOrder"),
     ] {
         let root = fixture(fix);
         let outcome = analyze(&root, &[entry.into()], &AnalyzeOptions::default())
@@ -935,6 +972,7 @@ fn cli_binary_emits_valid_json_for_new_languages() {
         ("go-gin", "CreateOrder"),
         ("rust-axum", "create_order"),
         ("scala-play", "createOrder"),
+        ("kotlin-ktor", "createOrder"),
     ] {
         let root = fixture(fix);
         let out = Command::new(bin)
@@ -1134,6 +1172,60 @@ fn scala_method_call_resolves() {
     );
 }
 
+#[test]
+fn kotlin_method_call_resolves() {
+    // Smallest possible kotlin source exercising the two call shapes that
+    // tags.rs depends on: a bare call (`save()`) inside a function, and a
+    // receiver call (`repo.save()`) through a navigation_expression. If the
+    // Kotlin query loses either pattern, the call edge here disappears and
+    // this test fails fast — protecting against silent grammar regressions
+    // the fixture-level test could mask.
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("kotlin_method_call_resolves", "(inline Kotlin)");
+
+    let src = "class Repo {\n    fun save(): Int = 1\n}\n\
+               class Handler(val repo: Repo) {\n    fun run(): Int = repo.save()\n}\n";
+    let tags = extract_tags_from_source(Path::new("App.kt"), Language::Kotlin, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    assert!(tags.symbols.iter().any(|s| s.name == "save"));
+    assert!(tags.symbols.iter().any(|s| s.name == "run"));
+
+    let run_id = graph.find_entry_points("run").first().cloned().unwrap();
+    let save_id = graph.find_entry_points("save").first().cloned().unwrap();
+    assert!(
+        graph.callees(&run_id).contains(&save_id),
+        "run should call repo.save → save; callees: {:?}",
+        graph.callees(&run_id)
+    );
+}
+
+#[test]
+fn kotlin_suspend_function_detected_as_async() {
+    // Kotlin's coroutine entry-point keyword is `suspend`. The Phase A
+    // `is_async` flag is what feeds the blocking-in-async detector, so a
+    // grammar/metric regression that misses `suspend` would silently turn
+    // off that finding for the entire Kotlin ecosystem.
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("kotlin_suspend_function_detected_as_async", "(inline Kotlin)");
+
+    let src = "suspend fun fetchUser(id: Long): Int {\n    return id.toInt()\n}\n";
+    let tags = extract_tags_from_source(Path::new("App.kt"), Language::Kotlin, src).unwrap();
+    let fetch = tags
+        .symbols
+        .iter()
+        .find(|s| s.name == "fetchUser")
+        .expect("fetchUser symbol");
+    assert!(
+        fetch.is_async,
+        "suspend fun should set is_async=true; got {fetch:?}"
+    );
+}
+
 // --------- cross-cutting sanity ---------
 
 #[test]
@@ -1176,6 +1268,14 @@ fn from_path_recognizes_new_language_extensions() {
     assert_eq!(
         Language::from_path(Path::new("worksheet.sc")),
         Some(Language::Scala)
+    );
+    assert_eq!(
+        Language::from_path(Path::new("src/Main.kt")),
+        Some(Language::Kotlin)
+    );
+    assert_eq!(
+        Language::from_path(Path::new("build.gradle.kts")),
+        Some(Language::Kotlin)
     );
     // sanity: unknown still returns None
     assert_eq!(Language::from_path(Path::new("README.md")), None);

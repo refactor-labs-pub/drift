@@ -1,4 +1,5 @@
 use crate::categories::{classify, Category, ClassifyTier};
+use crate::progress::{NullProgress, Progress};
 use crate::{FileTags, Symbol};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -44,14 +45,37 @@ pub struct CallGraph {
 }
 
 impl CallGraph {
+    /// Convenience: build with no progress reporting. Library
+    /// consumers and existing tests stay on this path.
     pub fn build(all: &[FileTags]) -> Self {
+        Self::build_with_progress(all, &NullProgress)
+    }
+
+    /// Build the call graph and surface per-file progress through
+    /// `progress`. The body is identical to the silent `build` but
+    /// the three large loops over `all` each emit `step_*` events so
+    /// the CLI can render a percentage bar — without this, the user
+    /// sees a single static "building call graph…" phase for the
+    /// entire (potentially multi-minute) graph construction on a
+    /// large monorepo.
+    pub fn build_with_progress(all: &[FileTags], progress: &dyn Progress) -> Self {
+        let total = all.len();
         let mut symbols: HashMap<SymbolId, Symbol> = HashMap::new();
         let mut by_name: HashMap<String, Vec<SymbolId>> = HashMap::new();
         let mut edges: HashMap<SymbolId, Vec<SymbolId>> = HashMap::new();
         let mut callers: HashMap<SymbolId, Vec<SymbolId>> = HashMap::new();
         let mut external_calls: HashMap<SymbolId, Vec<ExternalCall>> = HashMap::new();
 
-        for ft in all {
+        // ── Pass 1: index every defined symbol ──────────────────────────
+        progress.step_start("indexing symbols", total);
+        for (i, ft) in all.iter().enumerate() {
+            // Surface the file path so the bar shows which file's
+            // symbols are being indexed right now. Cheap stringify;
+            // the sink only redraws every ~30Hz so this won't
+            // bottleneck the loop.
+            if i & 0x3F == 0 {
+                progress.set_current(&ft.file.display().to_string());
+            }
             for s in &ft.symbols {
                 let id = SymbolId::for_symbol(s);
                 by_name.entry(s.name.clone()).or_default().push(id.clone());
@@ -59,14 +83,34 @@ impl CallGraph {
                 edges.entry(id.clone()).or_default();
                 callers.entry(id).or_default();
             }
+            // Throttle: indicatif's own draw thread already debounces
+            // redraws (~30fps), but skipping at the call-site keeps
+            // the callback path itself cheap when per-file work is
+            // tiny. 64 files per checkpoint matches the granularity
+            // used in pass 2 and 3 below.
+            if i & 0x3F == 0 {
+                progress.step_progress(i, total);
+            }
         }
+        progress.step_progress(total, total);
+        progress.step_end();
 
-        // Wire edges + external classifications.
+        // ── Pass 2: wire edges + external classifications ───────────────
         // For each reference R inside symbol X:
         //   - if R's name resolves to one or more defined symbols → add edges
         //   - if R's name doesn't resolve AND matches a category pattern →
         //     record as an external call on X.
-        for ft in all {
+        //
+        // This is typically the slowest pass on large graphs because the
+        // by_name lookup happens per-reference and the de-dup checks
+        // (`bucket.contains(...)`) walk small vectors. We report progress
+        // at file granularity (matches the natural outer-loop boundary)
+        // rather than per-reference (would flood the callback).
+        progress.step_start("wiring call edges", total);
+        for (i, ft) in all.iter().enumerate() {
+            if i & 0x3F == 0 {
+                progress.set_current(&ft.file.display().to_string());
+            }
             for r in &ft.references {
                 let Some(in_name) = &r.in_symbol else { continue };
                 let Some(src) = ft.symbols.iter().find(|s| {
@@ -123,15 +167,21 @@ impl CallGraph {
                     }
                 }
             }
+            if i & 0x3F == 0 {
+                progress.step_progress(i, total);
+            }
         }
+        progress.step_progress(total, total);
+        progress.step_end();
 
         // ── Phase B: graph-derived metrics ──
 
         // 1. call_site_count: total references resolving TO each symbol (not unique callers).
         //    Different from callers.len() (unique source symbols) — counts every callsite.
+        progress.step_start("counting call sites", total);
         let mut call_site_count: HashMap<SymbolId, usize> =
             symbols.keys().map(|k| (k.clone(), 0usize)).collect();
-        for ft in all {
+        for (i, ft) in all.iter().enumerate() {
             for r in &ft.references {
                 let Some(_) = r.in_symbol.as_ref() else { continue };
                 if let Some(targets) = by_name.get(&r.name) {
@@ -142,9 +192,22 @@ impl CallGraph {
                     }
                 }
             }
+            if i & 0x3F == 0 {
+                progress.step_progress(i, total);
+            }
         }
+        progress.step_progress(total, total);
+        progress.step_end();
 
         // 2. Build a petgraph DiGraph for PageRank + SCC.
+        //
+        // These two passes (Tarjan SCC + 100-iteration PageRank) are
+        // single atomic operations from our perspective — there's no
+        // natural per-symbol checkpoint inside petgraph. We surface
+        // them as `phase(...)` labels rather than step_* bars so the
+        // user at least sees that "ranking…" is what's running, even
+        // though we can't show a percentage.
+        progress.phase("computing SCC + PageRank…");
         use petgraph::graph::DiGraph;
         let mut g: DiGraph<SymbolId, ()> = DiGraph::new();
         let mut idx_of: HashMap<SymbolId, petgraph::graph::NodeIndex> = HashMap::new();
@@ -176,8 +239,41 @@ impl CallGraph {
             }
         }
 
-        // 4. PageRank, α=0.85, 100 iters (Brin & Page canonical).
-        let ranks: Vec<f64> = petgraph::algo::page_rank(&g, 0.85_f64, 100);
+        // 4. PageRank, α=0.85, custom power-iteration with early-exit
+        //    on convergence at tol=1e-6 (NetworkX-standard tolerance).
+        //
+        // Rationale for the swap from `petgraph::algo::page_rank`:
+        //   - The hot-zone / log-amplification / severity-bump
+        //     detectors all gate on `rank >= pagerank_p90`. Fixed-iter
+        //     PageRank loses accuracy near the p90 boundary as iters
+        //     drop — a 30-iter fixed run leaves ~7.6e-3 worst-case
+        //     residual, big enough to flip borderline classifications.
+        //   - Tolerance-based convergence pays only for the precision
+        //     we need: typically 25–50 iters on real call graphs,
+        //     capped at 100 to bound the worst case. The residual
+        //     bound from tol=1e-6 is ~5.7e-6 (≈ tol·α/(1−α)) — three
+        //     orders of magnitude tighter than fixed-30, and within
+        //     striking distance of fixed-100's ≈1.7e-7.
+        //   - Per-iter work is also lower: out-degrees are computed
+        //     once, the receive-buffer is reused across iters, and
+        //     the dangling-redistribution loop is skipped entirely
+        //     when no dangling nodes exist.
+        //
+        // See `src/pagerank.rs` for the implementation + tests.
+        let (ranks, pr_iters) = crate::pagerank::page_rank(
+            &g,
+            0.85_f64,
+            crate::pagerank::DEFAULT_TOL,
+            crate::pagerank::MAX_ITER,
+        );
+        // Surface the actual iteration count so users (and CI logs)
+        // can spot graphs that hit the max-iter cap, which would
+        // indicate either a pathological structure or a tolerance
+        // that's too tight for the graph's spectral gap.
+        progress.phase(&format!(
+            "PageRank converged in {pr_iters}/{} iters",
+            crate::pagerank::MAX_ITER,
+        ));
         let mut pagerank: HashMap<SymbolId, f64> = HashMap::new();
         for (ni, rank) in ranks.iter().enumerate() {
             if let Some(id) = g.node_weight(petgraph::graph::NodeIndex::new(ni)) {

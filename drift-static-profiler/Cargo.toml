@@ -22,15 +22,32 @@ tree-sitter-javascript = "0.25"
 tree-sitter-go = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-scala = "0.26"
+tree-sitter-kotlin-ng = "1.1"
 tree-sitter-containerfile = "0.8"
 serde_yaml = "0.9"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 ignore = "0.4"
 petgraph = "0.8"
+# Data-parallelism for tree-sitter parsing across files. Each worker
+# thread owns its own Parser and pre-compiled Query (one per language),
+# so the per-file query-compile cost in `tags::extract_tags_from_source`
+# is amortized down to once-per-thread-per-language.
+rayon = "1"
+# Terminal progress bars (the modern tqdm/Bun/HuggingFace style:
+# overall + per-phase bars, ETA, rate, current-file). Used by
+# `progress::CliProgress` — library callers that pass `NullProgress`
+# don't pull any of this in at runtime. indicatif gracefully
+# degrades to silent on non-TTY without us needing IsTerminal checks
+# in the CLI, while still letting completion lines flow to scrollback.
+indicatif = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+# Wall-clock timestamp for `Generator.captured_at` (ISO 8601 / RFC 3339).
+# Default features pull in `oldtime` and a windowsdll; we only need the
+# system-clock + formatter, so disable defaults and opt into `clock` only.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 # Validates emitted JSON reports against the published schema in the

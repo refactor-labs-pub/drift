@@ -494,6 +494,9 @@ export interface Generator {
   tool: string;
   version: string;
   source_root?: string;
+  /// RFC 3339 UTC timestamp of when this scan was produced. Older
+  /// fixtures emitted before the Rust side wrote it out omit the field.
+  captured_at?: string;
 }
 
 export interface Report {

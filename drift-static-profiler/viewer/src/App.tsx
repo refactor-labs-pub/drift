@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { FIXTURES } from './fixtures';
+import { useUserScans } from './userScans';
 import { FlameView } from './FlameView';
 import { CallTreeView } from './CallTreeView';
 import { DetailsPane } from './DetailsPane';
@@ -30,8 +31,17 @@ export function App() {
   // so refresh / back / share all work.
   const params = useParams<{ fixtureKey: string }>();
   const navigate = useNavigate();
-  const fixtureKey = (params.fixtureKey && FIXTURES.find(f => f.key === params.fixtureKey)?.key)
-    ?? FIXTURES[0].key;
+  // User scans live in /fixtures/scans/index.json and are loaded
+  // asynchronously. Until they arrive, a URL like `/scan/ktor` won't
+  // match any built-in fixture but should still fetch
+  // /fixtures/scans/ktor.json — handled below by an optimistic
+  // synthesized FixtureSpec.
+  const { scans: userScans } = useUserScans();
+  const allFixtures = useMemo(() => [...FIXTURES, ...userScans], [userScans]);
+  const matched = params.fixtureKey
+    ? allFixtures.find(f => f.key === params.fixtureKey)
+    : undefined;
+  const fixtureKey = matched?.key ?? params.fixtureKey ?? FIXTURES[0].key;
   const setFixtureKey = (k: string) => navigate(`/scan/${k}`);
   // Default to the Roots tab when the loaded report has many entries (the
   // signature of `make scan-roots` output, where the entry dropdown alone
@@ -65,20 +75,36 @@ export function App() {
   const sidebarStart = useRef(sidebarWidth);
   const bottomStart = useRef(bottomHeight);
 
-  const fixture = FIXTURES.find(f => f.key === fixtureKey)!;
+  // If the URL key didn't match any known fixture YET (built-in list is
+  // empty for user-scan keys until the index loads), synthesize a
+  // FixtureSpec pointing at /fixtures/scans/<key>.json so the fetch
+  // proceeds optimistically. Once the index loads and `matched` resolves,
+  // the proper label/description take over.
+  const fixture = matched ?? (
+    params.fixtureKey
+      ? {
+          key: params.fixtureKey,
+          label: params.fixtureKey,
+          json: `/fixtures/scans/${params.fixtureKey}.json`,
+          description: 'Local scan',
+        }
+      : FIXTURES[0]
+  );
 
-  // For scan-fed fixtures (`roots` from `make scan-roots`, `custom` from
-  // `make scan`), replace the generic static label with the last path
-  // segment of whatever folder was actually scanned. Lets the user see
-  // ".../automation-enrichements" instead of "Root Profile (auto-discovered)".
+  // For scan-fed fixtures (user scans under scans/, plus the legacy
+  // `roots` key from old `make scan-roots ROOTS_NAME=roots` runs),
+  // replace the generic static label with the last path segment of the
+  // folder that was actually scanned. Lets the user see ".../ktor"
+  // instead of just the bare key.
+  const isUserScan = userScans.some(s => s.key === fixtureKey);
   const fixtureLabel = useMemo(() => {
     const root = report?.generator?.source_root;
-    if (root && (fixtureKey === 'roots' || fixtureKey === 'custom')) {
+    if (root && (isUserScan || fixtureKey === 'roots')) {
       const base = root.replace(/[/\\]+$/, '').split(/[/\\]/).pop();
       if (base) return `.../${base}`;
     }
     return fixture.label;
-  }, [report, fixtureKey, fixture.label]);
+  }, [report, fixtureKey, fixture.label, isUserScan]);
 
   useEffect(() => {
     setError(null);
@@ -407,6 +433,9 @@ function Toolbar(props: {
   description: string;
 }) {
   const { fixtureKey, setFixtureKey, fixtureLabel, roots, entryDecls, activeRootId, setActiveRootId, search, setSearch, flameMode, setFlameMode, description } = props;
+  // Re-call the hook here (shared module-level cache, so no extra
+  // fetch) to build the "your scans" optgroup in the Fixture dropdown.
+  const { scans: userScans } = useUserScans();
 
   // Source-filter dropdown: lets the user narrow the ENTRY picker to
   // roots launched by a specific manifest (Dockerfile, package.json,
@@ -475,11 +504,22 @@ function Toolbar(props: {
         style={selectStyle}
         title={TIPS.toolbar_fixture}
       >
-        {FIXTURES.map(f => (
-          <option key={f.key} value={f.key} title={f.description}>
-            {f.key === fixtureKey ? fixtureLabel : f.label}
-          </option>
-        ))}
+        {userScans.length > 0 && (
+          <optgroup label="your scans">
+            {userScans.map(f => (
+              <option key={f.key} value={f.key} title={f.description}>
+                {f.key === fixtureKey ? fixtureLabel : f.label}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="built-in fixtures">
+          {FIXTURES.map(f => (
+            <option key={f.key} value={f.key} title={f.description}>
+              {f.key === fixtureKey ? fixtureLabel : f.label}
+            </option>
+          ))}
+        </optgroup>
       </select>
       {showSourceFilter && (
         <>

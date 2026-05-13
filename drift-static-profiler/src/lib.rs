@@ -7,14 +7,21 @@ pub mod manifest;
 pub mod insights;
 pub mod linguist;
 pub mod metrics;
+pub mod pagerank;
 pub mod parser;
+pub mod progress;
 pub mod report;
 pub mod roots;
+pub mod scans_index;
 pub mod tags;
 pub mod tree;
 pub mod walker;
 
-pub use api::{analyze, analyze_roots, AnalyzeOptions, AnalyzeOutcome};
+pub use api::{
+    analyze, analyze_roots, analyze_roots_with_progress, analyze_with_progress, AnalyzeOptions,
+    AnalyzeOutcome,
+};
+pub use progress::{CliProgress, NullProgress, Progress};
 pub use linguist::{compute_language_stats, LanguageStats};
 pub use roots::{discover_roots, DiscoverOpts, DiscoveredRoot};
 
@@ -30,6 +37,7 @@ pub enum Language {
     Go,
     Rust,
     Scala,
+    Kotlin,
 }
 
 impl Language {
@@ -43,6 +51,10 @@ impl Language {
             "go" => Some(Self::Go),
             "rs" => Some(Self::Rust),
             "scala" | "sc" => Some(Self::Scala),
+            // `.kt` for Kotlin source, `.kts` for Kotlin scripts. We treat
+            // both the same since the tree-sitter grammar parses script
+            // files as well — there's no separate Kotlin-script grammar.
+            "kt" | "kts" => Some(Self::Kotlin),
             _ => None,
         }
     }

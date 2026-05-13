@@ -38,9 +38,27 @@ pub fn compute(node: Node, source: &str, lang: Language) -> SymbolMetrics {
     }
 }
 
-fn body_of<'a>(node: Node<'a>, _lang: Language) -> Option<Node<'a>> {
-    // Try child by field name first (works across all four languages).
-    node.child_by_field_name("body")
+fn body_of<'a>(node: Node<'a>, lang: Language) -> Option<Node<'a>> {
+    // Try child by field name first (works for Python/Java/TS/JS/Go/Rust/Scala).
+    if let Some(b) = node.child_by_field_name("body") {
+        return Some(b);
+    }
+    // Kotlin's tree-sitter grammar exposes the body as a named child
+    // `function_body` rather than a `body` field — so the generic lookup
+    // above misses it. Fall back to a kind-scan for that one language.
+    // Without this, complexity / nesting / loop / await metrics would be
+    // computed over the WHOLE function_declaration node (including
+    // modifiers, return type, parameter list), inflating LOC counts and
+    // potentially counting param-list-internal noise as decision points.
+    if matches!(lang, Language::Kotlin) {
+        let mut c = node.walk();
+        for child in node.named_children(&mut c) {
+            if child.kind() == "function_body" {
+                return Some(child);
+            }
+        }
+    }
+    None
 }
 
 fn count_lines_in_range(source: &str, start: usize, end: usize) -> usize {
@@ -100,6 +118,16 @@ fn is_decision_point(n: Node, lang: Language) -> bool {
             | "match_arm"
             // Scala mirrors most of the Rust-style expression names.
             | "case_block"
+            // Kotlin: `when (x) { ... }` is the language's pattern-match,
+            // each `when_entry` is one branch (counted like a case_clause),
+            // and `do_while_statement` / `catch_block` / `try_expression`
+            // round out the control-flow set. `if_expression` is already
+            // counted via the Rust list above.
+            | "when_expression"
+            | "when_entry"
+            | "do_while_statement"
+            | "catch_block"
+            | "try_expression"
     );
     if common {
         return true;
@@ -112,7 +140,8 @@ fn is_decision_point(n: Node, lang: Language) -> bool {
         | Language::JavaScript
         | Language::Go
         | Language::Rust
-        | Language::Scala => {
+        | Language::Scala
+        | Language::Kotlin => {
             // tree-sitter exposes && / || as the operator field on binary_expression
             // Recognize the binary_expression itself and check the operator text.
             if k == "binary_expression" {
@@ -189,6 +218,18 @@ fn is_nesting_kind(n: Node, _lang: Language) -> bool {
             // Scala — function_definition already listed above.
             | "match_clause"
             | "indented_block"
+            // Kotlin: `when`/`try` are expressions (so the *_expression
+            // names), `do_while_statement` is the do-while loop, and
+            // `lambda_literal` / `anonymous_function` introduce a new
+            // scope level the same way Java's anonymous classes do.
+            // `function_declaration` already covers the `fun` definition
+            // form via the entries above (Python/Java naming).
+            | "when_expression"
+            | "do_while_statement"
+            | "try_expression"
+            | "catch_block"
+            | "lambda_literal"
+            | "anonymous_function"
     )
 }
 
@@ -282,6 +323,17 @@ fn detect_async(node: Node, source: &str, lang: Language) -> bool {
         // Scala async is library-level (Future, ZIO, cats-effect …), not a
         // keyword on the def, so we can't detect it syntactically.
         Language::Scala => false,
+        // Kotlin: `suspend fun name()`, optionally preceded by other
+        // modifiers (visibility, override, etc.). Look for the keyword
+        // anywhere in the leading modifier list before the `fun` token.
+        // We bound the search at `fun ` so trailing body content can't
+        // false-trigger (e.g. a comment containing "suspend").
+        Language::Kotlin => match trimmed.split_once("fun ") {
+            Some((modifiers, _)) => modifiers
+                .split_whitespace()
+                .any(|tok| tok == "suspend"),
+            None => false,
+        },
     }
 }
 
@@ -325,6 +377,10 @@ fn is_loop_kind(n: Node) -> bool {
             | "while_expression"
             | "while_let_expression"
             | "loop_expression"
+            // Kotlin: do-while is a separate node kind from the Java-style
+            // `do_statement` above. `for_statement` / `while_statement`
+            // already match.
+            | "do_while_statement"
     )
 }
 
