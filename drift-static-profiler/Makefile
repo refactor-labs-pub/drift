@@ -51,9 +51,9 @@ RESET  := \033[0m
         test-verbose test-python test-java test-ts list-tests \
         demo-python demo-java demo-ts demo-js \
         tags-python tags-java tags-ts tags-js \
-        refresh refresh-python refresh-java refresh-ts refresh-js refresh-insights-demo viewer-data \
+        refresh refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-insights-demo viewer-data \
         viewer-bun viewer-stop viewer-install viewer-build \
-        scan scan-roots \
+        scan scan-roots scan-no-tests scan-roots-no-tests \
         diff-demo schema-validate \
         refresh-catalogs extend-catalogs verify-catalogs list-uncategorized \
         sync-otel-registry refresh-from-upstream \
@@ -170,7 +170,7 @@ tags-js: $(BIN) ## Raw tree-sitter tags for the JavaScript fixture
 
 ### Refresh viewer fixtures
 
-refresh: refresh-python refresh-java refresh-ts refresh-js refresh-insights-demo ## Rerun ALL fixtures through the profiler
+refresh: refresh-python refresh-java refresh-ts refresh-js refresh-go refresh-rust refresh-scala refresh-insights-demo ## Rerun ALL fixtures through the profiler
 	@printf "$(GREEN)✓$(RESET) all viewer fixtures regenerated from the profiler\n"
 
 refresh-insights-demo: $(BIN) ## Regenerate the synthetic insights-demo fixture (showcases findings)
@@ -180,6 +180,32 @@ refresh-insights-demo: $(BIN) ## Regenerate the synthetic insights-demo fixture 
 	  --out-dir $(FIXTURE_OUT) \
 	  --no-accessors > /dev/null
 	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/insights-demo.json\n"
+
+# go-gin / rust-axum / scala-play use auto-root-discovery (no single
+# --entry name fits all of them). Same pattern as refresh-insights-demo.
+refresh-go: $(BIN) ## Regenerate the Go fixture
+	@mkdir -p $(FIXTURE_OUT)
+	@$(BIN) analyze-root tests/fixtures/go-gin \
+	  --name go-gin \
+	  --out-dir $(FIXTURE_OUT) \
+	  --no-accessors > /dev/null
+	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/go-gin.json\n"
+
+refresh-rust: $(BIN) ## Regenerate the Rust fixture
+	@mkdir -p $(FIXTURE_OUT)
+	@$(BIN) analyze-root tests/fixtures/rust-axum \
+	  --name rust-axum \
+	  --out-dir $(FIXTURE_OUT) \
+	  --no-accessors > /dev/null
+	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/rust-axum.json\n"
+
+refresh-scala: $(BIN) ## Regenerate the Scala fixture
+	@mkdir -p $(FIXTURE_OUT)
+	@$(BIN) analyze-root tests/fixtures/scala-play \
+	  --name scala-play \
+	  --out-dir $(FIXTURE_OUT) \
+	  --no-accessors > /dev/null
+	@printf "  $(BLUE)↻$(RESET) $(FIXTURE_OUT)/scala-play.json\n"
 
 refresh-python: $(BIN) ## Rerun just the Python fixture
 	@mkdir -p $(FIXTURE_OUT)
@@ -243,11 +269,12 @@ viewer-build: install-viewer refresh ## Production build → viewer/dist/
 #
 # ENTRY accepts a single name OR a space-separated list (quote the value).
 # Then `make viewer` (or refresh your open tab) and choose "Custom Scan".
-# Allow a positional path: `make scan-roots /abs/path` or `make scan /abs/path ...`
-# Treat any extra goals after scan/scan-roots as args: first one → SCAN_PATH,
+# Allow a positional path: `make scan /abs/path`, `make scan-roots /abs/path`,
+# `make scan-no-tests /abs/path`, etc. Treat any extra goals after scan/
+# scan-roots/scan-no-tests/scan-roots-no-tests as args: first one → SCAN_PATH,
 # and stub them out as no-op targets so make doesn't try to build them.
-ifneq ($(filter scan scan-roots,$(MAKECMDGOALS)),)
-  SCAN_POSITIONAL := $(filter-out scan scan-roots,$(MAKECMDGOALS))
+ifneq ($(filter scan scan-roots scan-no-tests scan-roots-no-tests,$(MAKECMDGOALS)),)
+  SCAN_POSITIONAL := $(filter-out scan scan-roots scan-no-tests scan-roots-no-tests,$(MAKECMDGOALS))
   ifneq ($(SCAN_POSITIONAL),)
     SCAN_PATH ?= $(firstword $(SCAN_POSITIONAL))
     $(eval $(SCAN_POSITIONAL):;@:)
@@ -258,28 +285,36 @@ SCAN_PATH  ?=
 ENTRY      ?=
 NAME       ?= custom
 
-scan: $(BIN) ## Analyze any folder and write it as viewer/public/fixtures/<NAME>.json (auto-discovers roots if ENTRY is omitted)
+# `scan` is the "everything" target: it walks the project, auto-
+# discovers every in-degree=0 symbol as a root, and disables every root
+# filter (tests, private symbols, accessors, reach<2). Use this when
+# you want the full picture; use `scan-roots` for the curated default
+# discovery; use `scan-no-tests` for the same "everything" view but
+# with test/spec/mock files dropped at the walker stage.
+#
+# Defaults to NAME=custom so it writes the viewer's "Custom Scan"
+# fixture. Override with NAME=… for a separate fixture.
+#
+#   make scan /abs/path
+#   make scan SCAN_PATH=/abs/path NAME=myproj
+scan: $(BIN) ## Scan any folder with ALL root filters off (everything as roots). Curated alternative: `scan-roots`. Strict: `scan-no-tests`.
 	@if [ -z "$(SCAN_PATH)" ]; then \
-	  printf "$(YELLOW)!$(RESET) usage: make scan /abs/path [ENTRY=symName] [NAME=fixture_name]\n"; \
-	  printf "          or: make scan SCAN_PATH=/abs/path [ENTRY=symName] [NAME=fixture_name]\n"; \
-	  printf "   tip: ENTRY=\"foo bar baz\" passes multiple entry points\n"; \
-	  printf "   tip: omit ENTRY to auto-discover all root entry points (recommended)\n"; \
+	  printf "$(YELLOW)!$(RESET) usage: make scan /abs/path [NAME=fixture_name]\n"; \
+	  printf "          or: make scan SCAN_PATH=/abs/path [NAME=fixture_name]\n"; \
+	  printf "   tip: this is the unfiltered scan — every in-degree=0 symbol is a root.\n"; \
+	  printf "        use `make scan-roots` for the curated default (skips tests/private/accessors).\n"; \
 	  exit 1; \
 	fi
-	@ENTRIES=""; \
-	  for e in $(ENTRY); do ENTRIES="$$ENTRIES --entry $$e"; done; \
-	  if [ -z "$$ENTRIES" ]; then \
-	    printf "$(BLUE)▶$(RESET) auto-discovering roots in $(SCAN_PATH) → $(FIXTURE_OUT)/$(NAME).json\n"; \
-	    $(BIN) analyze-root "$(SCAN_PATH)" \
-	      --name "$(NAME)" \
-	      --out-dir "$(FIXTURE_OUT)" \
-	      --min-reach $(MIN_REACH) \
-	      --max-roots $(MAX_ROOTS) \
-	      --no-accessors; \
-	  else \
-	    printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (entry: $(ENTRY)) → $(FIXTURE_OUT)/$(NAME).json\n"; \
-	    $(BIN) scan "$(SCAN_PATH)" $$ENTRIES --name "$(NAME)" --out-dir "$(FIXTURE_OUT)" --no-accessors; \
-	  fi
+	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters) → $(FIXTURE_OUT)/$(NAME).json\n"
+	@$(BIN) analyze-root "$(SCAN_PATH)" \
+	  --name "$(NAME)" \
+	  --out-dir "$(FIXTURE_OUT)" \
+	  --min-reach 1 \
+	  --max-roots 5000 \
+	  --include-tests \
+	  --include-private \
+	  --include-accessors \
+	  --print
 
 # Root-level profile: auto-discover every plausible entry point in a folder
 # (symbols with no in-graph caller, ranked by transitive reach) and profile
@@ -309,6 +344,54 @@ scan-roots: $(BIN) ## Auto-discover root entry points and write a multi-root pro
 	  --min-reach $(MIN_REACH) \
 	  --max-roots $(MAX_ROOTS) \
 	  --no-accessors \
+	  --print
+
+# `scan-no-tests` is `scan` minus tests: same "everything as roots"
+# semantics (every in-degree=0 symbol qualifies, all filters off), but
+# test/spec/mock files are dropped at the WALKER stage so they don't
+# enter the graph at all — not as roots, not as callees, not as
+# dead_code. The walker's filter matches path segments (`tests/`,
+# `__tests__/`, `spec/`, `__mocks__/`, `testdata/`) and filename
+# conventions (`*.test.{ts,js}`, `*.spec.*`, `test_*.py`, `*_test.go`,
+# `*Test.java`, `*Spec.scala`, `*.mock.*`).
+#
+# Defaults to NAME=custom so it overwrites the same fixture the
+# viewer's "Custom Scan" tab loads. Override with NAME=…
+#
+#   make scan-no-tests /abs/path
+#   make scan-no-tests SCAN_PATH=/abs/path NAME=myproj-prod
+scan-no-tests: $(BIN) ## Like `scan` (everything as roots) but with test/spec/mock files dropped at the walker stage.
+	@if [ -z "$(SCAN_PATH)" ]; then \
+	  printf "$(YELLOW)!$(RESET) usage: make scan-no-tests /abs/path [NAME=fixture_name]\n"; \
+	  printf "          or: make scan-no-tests SCAN_PATH=/abs/path [NAME=fixture_name]\n"; \
+	  printf "   tip: same loose discovery as `make scan`, but test/spec/mock files are walked OUT.\n"; \
+	  exit 1; \
+	fi
+	@printf "$(BLUE)▶$(RESET) scanning $(SCAN_PATH) (no filters, no tests) → $(FIXTURE_OUT)/$(NAME).json\n"
+	@$(BIN) analyze-root "$(SCAN_PATH)" \
+	  --name "$(NAME)" \
+	  --out-dir "$(FIXTURE_OUT)" \
+	  --min-reach 1 \
+	  --max-roots 5000 \
+	  --include-private \
+	  --include-accessors \
+	  --no-tests \
+	  --print
+
+scan-roots-no-tests: $(BIN) ## `make scan-roots` + walker-level filter for test/spec/mock files
+	@if [ -z "$(SCAN_PATH)" ]; then \
+	  printf "$(YELLOW)!$(RESET) usage: make scan-roots-no-tests /abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
+	  printf "          or: make scan-roots-no-tests SCAN_PATH=/abs/path [ROOTS_NAME=name] [MIN_REACH=N] [MAX_ROOTS=N]\n"; \
+	  exit 1; \
+	fi
+	@printf "$(BLUE)▶$(RESET) discovering roots in $(SCAN_PATH) (no tests) → $(FIXTURE_OUT)/$(ROOTS_NAME).json\n"
+	@$(BIN) analyze-root "$(SCAN_PATH)" \
+	  --name "$(ROOTS_NAME)" \
+	  --out-dir "$(FIXTURE_OUT)" \
+	  --min-reach $(MIN_REACH) \
+	  --max-roots $(MAX_ROOTS) \
+	  --no-accessors \
+	  --no-tests \
 	  --print
 
 ### Diff & schema

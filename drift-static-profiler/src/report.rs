@@ -1,6 +1,6 @@
 use crate::categories::Category;
 use crate::graph::CallGraph;
-use crate::insights::{self, FindingTopRef};
+use crate::insights::{self, FindingTopRef, ImmediateFix, RefactorCandidate, RootOverview};
 use crate::linguist::{LanguageBreakdownEntry, LanguageStats};
 use crate::tree::CallTreeNode;
 use crate::{FileTags, Language};
@@ -51,6 +51,22 @@ pub struct Summary {
     /// `node_id` via its existing `nodeIndex.byId` map.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings_top: Vec<FindingTopRef>,
+    /// Per-entry-point ("initial root") rollup: subtree share, categories
+    /// reached, findings by severity, first callees, callers. Mirrors
+    /// pprof's `top -cum` at root granularity. Sorted by subtree_size
+    /// descending.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots_overview: Vec<RootOverview>,
+    /// "What can I fix RIGHT NOW?" — high-severity findings with
+    /// trivial/small effort. Sorted by (severity DESC, effort ASC).
+    /// Modeled on SonarQube's <5-min / <30-min remediation lanes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub immediate_fixes: Vec<ImmediateFix>,
+    /// "Where do I need a full refactor?" — symbols with finding
+    /// clusters, Large-effort findings, or god-function bodies.
+    /// Aggregated per-node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refactor_candidates: Vec<RefactorCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,8 +121,15 @@ impl Report {
         let pagerank_p90 = insights::compute_pagerank_p90(graph.pagerank.values().copied());
         let mut entries = entries;
         insights::attach_recursive_findings(&mut entries);
+        insights::attach_missing_caching_findings(&mut entries);
+        insights::attach_log_amplification_findings(&mut entries, pagerank_p90);
         insights::attach_hot_log_findings(&mut entries, pagerank_p90);
         insights::attach_hot_zones(&mut entries, pagerank_p90);
+        // IMPORTANT: severity bumping must run LAST so it sees every
+        // finding the prior passes produced. Without it, every finding
+        // stays at its base severity regardless of where it sits in the
+        // call graph — see pprof's red+thick = high-cum convention.
+        insights::bump_severities_by_impact(&mut entries, pagerank_p90);
 
         let summary = Summary::build(all_tags, graph, &entries, language_stats);
         Self {
@@ -308,6 +331,9 @@ impl Summary {
         // each node by the per-node detectors and the post-build pass.
         let findings_by_kind = insights::collect_findings_by_kind(entries);
         let findings_top = insights::collect_findings_top(entries, 50);
+        let roots_overview = insights::collect_roots_overview(entries);
+        let immediate_fixes = insights::collect_immediate_fixes(entries, 50);
+        let refactor_candidates = insights::collect_refactor_candidates(entries, 30);
 
         Self {
             languages,
@@ -326,6 +352,9 @@ impl Summary {
             profiled_language_percent: language_stats.dominant_supported_percent,
             findings_by_kind,
             findings_top,
+            roots_overview,
+            immediate_fixes,
+            refactor_candidates,
         }
     }
 }

@@ -2,13 +2,18 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   CATEGORY_COLORS,
+  EFFORT_LABEL,
   FINDING_KIND_LABEL,
   SEVERITY_COLORS,
 } from '../types';
 import type {
   CallTreeNode,
   Category,
+  Effort,
   FindingKind,
+  ImmediateFix,
+  RefactorCandidate,
+  RootOverview,
   Severity,
 } from '../types';
 import { flattenFindings, useReport } from './useReport';
@@ -29,10 +34,20 @@ import { flattenFindings, useReport } from './useReport';
 export function ScanReportPage() {
   const { report, fixture, fixtureKey, error, loading } = useReport();
 
-  // Walk every entry tree once to produce a flat, deterministically-indexed
-  // list of findings. The viewer routes finding detail pages by index, so
-  // this is the canonical numbering.
+  // ── Rule-of-hooks: every hook below MUST run before any conditional
+  // return. `flattenFindings` returns [] for a null report, so the
+  // memoized values are well-defined even while `useReport` is still
+  // loading — that's what lets us call them up here.
   const allFindings = useMemo(() => flattenFindings(report), [report]);
+  const sevCounts: Record<Severity, number> = useMemo(() => {
+    const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
+    for (const t of allFindings) counts[t.finding.severity]++;
+    return counts;
+  }, [allFindings]);
+  const healthScore = useMemo(() => {
+    const s = 10 - sevCounts.high * 0.5 - sevCounts.medium * 0.2 - sevCounts.low * 0.05;
+    return Math.max(0, s);
+  }, [sevCounts]);
 
   if (!fixtureKey) {
     return <ErrorScreen message="no fixture key in URL" />;
@@ -49,23 +64,15 @@ export function ScanReportPage() {
   const findingsTop = summary.findings_top ?? [];
   const totalFindings = Object.values(findingsByKind).reduce((a, b) => a + b, 0);
 
-  const sevCounts: Record<Severity, number> = useMemo(() => {
-    const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
-    for (const t of allFindings) counts[t.finding.severity]++;
-    return counts;
-  }, [allFindings]);
-
-  const healthScore = useMemo(() => {
-    let s = 10 - sevCounts.high * 0.5 - sevCounts.medium * 0.2 - sevCounts.low * 0.05;
-    return Math.max(0, s);
-  }, [sevCounts]);
-
   const cats = Object.entries(summary.categories ?? {})
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1]);
 
   const langBreakdown = summary.language_breakdown ?? [];
   const entries = report.entries;
+  const rootsOverview = summary.roots_overview ?? [];
+  const immediateFixes = summary.immediate_fixes ?? [];
+  const refactorCandidates = summary.refactor_candidates ?? [];
 
   return (
     <div style={pageStyle}>
@@ -132,7 +139,316 @@ export function ScanReportPage() {
         />
         <EntryPointsCard entries={entries} fixtureKey={fixtureKey} />
       </main>
+
+      {/* Immediate Fixes: high-severity × trivial/small-effort findings.
+          SonarQube-style "quick wins" lane. Each row is a `<Link>` to
+          the corresponding finding detail page. */}
+      {immediateFixes.length > 0 && (
+        <section style={fullWidthSectionStyle}>
+          <ImmediateFixesCard
+            fixes={immediateFixes}
+            allFindings={allFindings}
+            fixtureKey={fixtureKey}
+          />
+        </section>
+      )}
+
+      {/* Refactor Candidates: nodes with finding clusters, Large-effort
+          findings, or god-function bodies. Each card links to that
+          node's detail page. */}
+      {refactorCandidates.length > 0 && (
+        <section style={fullWidthSectionStyle}>
+          <RefactorCandidatesCard candidates={refactorCandidates} fixtureKey={fixtureKey} />
+        </section>
+      )}
+
+      {/* Initial Roots: per-entry-point rollup (subtree share, categories,
+          findings-by-severity, first callees, callers). Inspired by
+          pprof's `top -cum` at root granularity. Each row is a `<Link>`
+          to the node detail page. Falls back to nothing when older
+          fixtures omit `roots_overview`. */}
+      {rootsOverview.length > 0 && (
+        <section style={fullWidthSectionStyle}>
+          <InitialRootsCard roots={rootsOverview} fixtureKey={fixtureKey} />
+        </section>
+      )}
     </div>
+  );
+}
+
+// ─── Immediate Fixes card ──────────────────────────────────────────────
+
+function ImmediateFixesCard({
+  fixes, allFindings, fixtureKey,
+}: {
+  fixes: ImmediateFix[];
+  allFindings: { idx: number; finding: { kind: FindingKind; line: number }; node: { id: string } }[];
+  fixtureKey: string;
+}) {
+  // Resolve each ImmediateFix back to its FindingDetailPage idx so the
+  // row links to the same canonical /finding/:idx URL the rest of the
+  // report uses.
+  const idxOf = (fx: ImmediateFix): number | null => {
+    const hit = allFindings.find(
+      (f) => f.finding.kind === fx.kind && f.finding.line === fx.line && f.node.id === fx.node_id,
+    );
+    return hit ? hit.idx : null;
+  };
+  return (
+    <Card
+      title={`immediate fixes · ${fixes.length}`}
+      hint="High-severity findings with trivial/small effort. The PR-sized fixes you can do today."
+    >
+      <ul style={listStyle}>
+        {fixes.map((fx, i) => {
+          const idx = idxOf(fx);
+          const row = (
+            <li style={fixRowStyle}>
+              <span style={{ ...miniBadgeStyle, background: SEVERITY_COLORS[fx.severity], minWidth: 56 }}>
+                {fx.severity}
+              </span>
+              <span style={{ ...effortPillStyle, background: effortBg(fx.effort), marginLeft: 6 }}>
+                {EFFORT_LABEL[fx.effort]}
+              </span>
+              <span style={{ ...kindBadgeStyle, marginLeft: 8 }}>
+                {FINDING_KIND_LABEL[fx.kind] ?? fx.kind}
+              </span>
+              <code style={{ ...codeStyle, marginLeft: 10 }}>
+                {fx.parent_class && <span style={{ color: '#7e8189' }}>{fx.parent_class}.</span>}
+                {fx.name}
+              </code>
+              <span style={locStyle}>{fx.file}:{fx.line}</span>
+              <div style={fixMessageStyle}>{fx.message}</div>
+            </li>
+          );
+          return idx !== null ? (
+            <Link
+              key={`${fx.node_id}:${fx.kind}:${fx.line}:${i}`}
+              to={`/scan/${fixtureKey}/finding/${idx}`}
+              style={rowLinkStyle}
+              title="Open finding detail page"
+            >
+              {row}
+            </Link>
+          ) : (
+            <div key={i}>{row}</div>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
+// ─── Refactor Candidates card ──────────────────────────────────────────
+
+function RefactorCandidatesCard({
+  candidates, fixtureKey,
+}: { candidates: RefactorCandidate[]; fixtureKey: string }) {
+  return (
+    <Card
+      title={`refactor candidates · ${candidates.length}`}
+      hint="Symbols that need a fuller rewrite: multiple findings, large effort, or god-function bodies."
+    >
+      <ul style={listStyle}>
+        {candidates.map((c) => (
+          <Link
+            key={c.node_id}
+            to={`/scan/${fixtureKey}/node/${encodeURIComponent(c.node_id)}`}
+            style={rowLinkStyle}
+            title={`Open ${c.name} detail page`}
+          >
+            <li style={refactorRowStyle}>
+              <div style={refactorHeaderStyle}>
+                <span style={{ ...miniBadgeStyle, background: SEVERITY_COLORS[c.worst_severity], minWidth: 56 }}>
+                  {c.worst_severity}
+                </span>
+                <span style={{ ...effortPillStyle, background: effortBg(c.max_effort), marginLeft: 6 }}>
+                  {EFFORT_LABEL[c.max_effort]}
+                </span>
+                <code style={{ ...codeStyle, marginLeft: 8 }}>
+                  {c.parent_class && <span style={{ color: '#7e8189' }}>{c.parent_class}.</span>}
+                  {c.name}
+                </code>
+                <span style={locStyle}>{c.file}:{c.line}</span>
+              </div>
+              <div style={refactorWhyStyle}>{c.why}</div>
+              <div style={refactorMetricsRowStyle}>
+                <Metric k="findings" v={String(c.findings_count)} />
+                <Metric k="complexity" v={String(c.complexity)} />
+                <Metric k="loc" v={String(c.loc)} />
+                <Metric k="reach" v={`${c.percent_total.toFixed(1)}%`} />
+                <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {c.kinds.map((k) => (
+                    <span key={k} style={kindBadgeStyle}>
+                      {FINDING_KIND_LABEL[k] ?? k}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            </li>
+          </Link>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/// Color stops for the effort pill — Trivial/Small are "go" green/blue,
+/// Medium amber, Large red. Reuses existing category palette so no new
+/// colors get introduced.
+function effortBg(e: Effort): string {
+  switch (e) {
+    case 'trivial': return '#48a999';
+    case 'small':   return '#5b8def';
+    case 'medium':  return '#e0a458';
+    case 'large':   return '#e26d6d';
+  }
+}
+
+function Metric({ k, v }: { k: string; v: string }) {
+  return (
+    <span style={metricInlineStyle}>
+      <span style={metricKeyStyle}>{k}</span>
+      <span style={metricValueStyle}>{v}</span>
+    </span>
+  );
+}
+
+// ─── Initial Roots card ─────────────────────────────────────────────────
+
+function InitialRootsCard({
+  roots, fixtureKey,
+}: { roots: RootOverview[]; fixtureKey: string }) {
+  return (
+    <Card title={`initial roots · ${roots.length}`} hint="One row per entry point. Click to open that root's node detail page.">
+      <ul style={listStyle}>
+        {roots.map((r) => (
+          <RootRow key={r.node_id} root={r} fixtureKey={fixtureKey} />
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function RootRow({ root, fixtureKey }: { root: RootOverview; fixtureKey: string }) {
+  const high = root.findings_by_severity?.high ?? 0;
+  const medium = root.findings_by_severity?.medium ?? 0;
+  const low = root.findings_by_severity?.low ?? 0;
+  const cats = Object.entries(root.categories_reached ?? {})
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const callees = root.first_callees ?? [];
+  const callers = root.callers ?? [];
+
+  return (
+    <li style={rootRowStyle}>
+      <Link
+        to={`/scan/${fixtureKey}/node/${encodeURIComponent(root.node_id)}`}
+        style={rootHeaderLinkStyle}
+        title={`Open ${root.name} detail page`}
+      >
+        <span style={rootKindStyle}>{root.kind}</span>
+        <code style={rootNameStyle}>
+          {root.parent_class && <span style={{ color: '#7e8189' }}>{root.parent_class}.</span>}
+          {root.name}
+        </code>
+        <span style={rootLocStyle}>{root.file}:{root.line}</span>
+      </Link>
+
+      <div style={rootReachRowStyle}>
+        <span style={{ ...rootLabelStyle }}>reach</span>
+        <span style={rootReachBarOuterStyle}>
+          <span style={{ ...rootReachBarFillStyle, width: `${Math.min(100, root.percent_of_all_roots)}%` }} />
+        </span>
+        <span style={rootReachValueStyle}>
+          {root.subtree_size}
+          <span style={{ color: '#7e8189', marginLeft: 4 }}>· {root.percent_of_all_roots.toFixed(1)}%</span>
+        </span>
+      </div>
+
+      <div style={rootChipsRowStyle}>
+        <span style={rootLabelStyle}>findings</span>
+        {root.findings_total === 0 ? (
+          <span style={{ ...rootDimStyle, marginLeft: 6 }}>clean</span>
+        ) : (
+          <>
+            <span style={rootFindingsTotalStyle}>{root.findings_total}</span>
+            {high > 0 && (
+              <Link
+                to={`/scan/${fixtureKey}/node/${encodeURIComponent(root.node_id)}`}
+                title="See high-severity findings on this root"
+                style={{ textDecoration: 'none' }}
+              >
+                <span style={{ ...sevPillStyle, background: SEVERITY_COLORS.high }}>{high} high</span>
+              </Link>
+            )}
+            {medium > 0 && (
+              <span style={{ ...sevPillStyle, background: SEVERITY_COLORS.medium }}>{medium} med</span>
+            )}
+            {low > 0 && (
+              <span style={{ ...sevPillStyle, background: SEVERITY_COLORS.low }}>{low} low</span>
+            )}
+          </>
+        )}
+      </div>
+
+      {cats.length > 0 && (
+        <div style={rootChipsRowStyle}>
+          <span style={rootLabelStyle}>reaches</span>
+          {cats.slice(0, 6).map(([cat, n]) => (
+            <span
+              key={cat}
+              style={{ ...catChipStyle, background: CATEGORY_COLORS[cat as Category] }}
+              title={`${n} ${cat} call(s) reachable from this root`}
+            >
+              {cat} <strong style={{ marginLeft: 3 }}>{n}</strong>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {callees.length > 0 && (
+        <div style={rootChipsRowStyle}>
+          <span style={rootLabelStyle}>first calls</span>
+          {callees.map((c) => (
+            <Link
+              key={c.node_id}
+              to={`/scan/${fixtureKey}/node/${encodeURIComponent(c.node_id)}`}
+              style={{ textDecoration: 'none' }}
+              title={`Drill into ${c.name} (reach ${c.subtree_size})`}
+            >
+              <span style={calleeChipStyle}>
+                {c.parent_class ? <span style={{ color: '#7e8189' }}>{c.parent_class}.</span> : null}
+                {c.name}
+                <span style={{ color: '#7e8189', marginLeft: 4 }}>·{c.subtree_size}</span>
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {callers.length > 0 && (
+        <div style={rootChipsRowStyle}>
+          <span style={rootLabelStyle}>callers</span>
+          {callers.slice(0, 4).map((c) => (
+            <Link
+              key={c.node_id}
+              to={`/scan/${fixtureKey}/node/${encodeURIComponent(c.node_id)}`}
+              style={{ textDecoration: 'none' }}
+              title={`Jump to caller ${c.name}`}
+            >
+              <span style={callerChipStyle}>
+                {c.parent_class ? <span style={{ color: '#7e8189' }}>{c.parent_class}.</span> : null}
+                {c.name}
+              </span>
+            </Link>
+          ))}
+          {callers.length > 4 && (
+            <span style={{ ...rootDimStyle, marginLeft: 4 }}>+{callers.length - 4} more</span>
+          )}
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -395,33 +711,40 @@ function lastSegment(id: string): string {
 function EntryPointsCard({
   entries, fixtureKey,
 }: { entries: CallTreeNode[]; fixtureKey: string }) {
-  const top = [...entries].sort((a, b) => b.subtree_size - a.subtree_size).slice(0, 10);
+  // Show ALL entries (sorted by reach DESC), scrollable. Previously
+  // capped at 10 — but a `make scan-roots` output can have dozens, and
+  // hiding them silently is confusing. The Initial Roots section below
+  // shows the same data with full detail per row; this card stays as
+  // the at-a-glance index.
+  const sorted = [...entries].sort((a, b) => b.subtree_size - a.subtree_size);
   return (
     <Card title={`entry points · ${entries.length}`}>
       {entries.length === 0 ? (
         <Empty msg="—" />
       ) : (
-        <ul style={listStyle}>
-          {top.map((e) => (
-            <Link
-              key={e.id}
-              to={`/scan/${fixtureKey}/node/${encodeURIComponent(e.id)}`}
-              style={rowLinkStyle}
-              title={`Open ${e.name} detail page`}
-            >
-              <li style={liStyle}>
-                <code style={codeStyle}>
-                  {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
-                  {e.name}
-                </code>
-                <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
-                  reach {e.subtree_size}
-                </span>
-                <span style={locStyle}>{e.file}:{e.line}</span>
-              </li>
-            </Link>
-          ))}
-        </ul>
+        <div style={scrollListStyle}>
+          <ul style={listStyle}>
+            {sorted.map((e) => (
+              <Link
+                key={e.id}
+                to={`/scan/${fixtureKey}/node/${encodeURIComponent(e.id)}`}
+                style={rowLinkStyle}
+                title={`Open ${e.name} detail page`}
+              >
+                <li style={liStyle}>
+                  <code style={codeStyle}>
+                    {e.parent_class ? <span style={{ color: '#7e8189' }}>{e.parent_class}.</span> : null}
+                    {e.name}
+                  </code>
+                  <span style={{ marginLeft: 'auto', color: '#7e8189', fontSize: 10 }}>
+                    reach {e.subtree_size}
+                  </span>
+                  <span style={locStyle}>{e.file}:{e.line}</span>
+                </li>
+              </Link>
+            ))}
+          </ul>
+        </div>
       )}
     </Card>
   );
@@ -551,6 +874,11 @@ const listStyle: React.CSSProperties = {
   margin: 0, padding: 0, listStyle: 'none',
   fontFamily: 'ui-monospace, monospace', fontSize: 11,
 };
+// Scrollable list container — bounds card height when the entry count is
+// large (e.g. `make scan-roots` output with 50+ roots).
+const scrollListStyle: React.CSSProperties = {
+  maxHeight: 280, overflowY: 'auto',
+};
 const liStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, padding: '6px 6px',
   borderBottom: '1px solid #2f3136',
@@ -592,4 +920,158 @@ const gaugeOuterStyle: React.CSSProperties = {
 const gaugeFillStyle: React.CSSProperties = {
   height: '100%',
   background: 'linear-gradient(90deg, #e26d6d 0%, #e0a458 50%, #48a999 100%)',
+};
+
+// ─── Initial Roots styles ───────────────────────────────────────────────
+
+const fullWidthSectionStyle: React.CSSProperties = {
+  maxWidth: 1200, margin: '0 auto 24px', padding: '0 24px',
+};
+const rootRowStyle: React.CSSProperties = {
+  display: 'block',
+  background: '#26282c',
+  border: '1px solid #3f4147',
+  borderRadius: 4,
+  padding: '10px 12px',
+  marginBottom: 8,
+};
+const rootHeaderLinkStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 8,
+  textDecoration: 'none',
+  color: 'inherit',
+};
+const rootKindStyle: React.CSSProperties = {
+  fontSize: 9, fontWeight: 700, color: '#7e8189',
+  textTransform: 'uppercase', letterSpacing: 0.5,
+  minWidth: 60,
+};
+const rootNameStyle: React.CSSProperties = {
+  background: '#1e1f22', padding: '2px 6px', borderRadius: 3,
+  color: '#d7d9dc', fontSize: 13, fontWeight: 600,
+};
+const rootLocStyle: React.CSSProperties = {
+  marginLeft: 'auto', color: '#7e8189', fontSize: 10,
+  fontFamily: 'ui-monospace, monospace',
+};
+const rootLabelStyle: React.CSSProperties = {
+  fontSize: 9, fontWeight: 700, color: '#7e8189',
+  textTransform: 'uppercase', letterSpacing: 0.4,
+  minWidth: 70,
+};
+const rootReachRowStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, marginTop: 8,
+};
+const rootReachBarOuterStyle: React.CSSProperties = {
+  flex: 1, height: 6, background: '#1e1f22', borderRadius: 2,
+  position: 'relative', overflow: 'hidden',
+};
+const rootReachBarFillStyle: React.CSSProperties = {
+  display: 'block', height: '100%', background: '#5b8def',
+};
+const rootReachValueStyle: React.CSSProperties = {
+  fontSize: 11, color: '#d7d9dc', minWidth: 110, textAlign: 'right',
+  fontFamily: 'ui-monospace, monospace',
+};
+const rootChipsRowStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap',
+};
+const rootFindingsTotalStyle: React.CSSProperties = {
+  fontSize: 11, color: '#d7d9dc', fontWeight: 600, marginRight: 4,
+};
+const rootDimStyle: React.CSSProperties = {
+  fontSize: 11, color: '#7e8189', fontStyle: 'italic',
+};
+const sevPillStyle: React.CSSProperties = {
+  display: 'inline-block', padding: '1px 7px', borderRadius: 3,
+  color: '#0a0a14', fontSize: 9, fontWeight: 700,
+  textTransform: 'uppercase', letterSpacing: 0.3,
+};
+const catChipStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', padding: '1px 7px',
+  borderRadius: 3, color: '#0a0a14', fontSize: 9, fontWeight: 700,
+  textTransform: 'uppercase', letterSpacing: 0.3,
+};
+const calleeChipStyle: React.CSSProperties = {
+  display: 'inline-block', padding: '2px 7px', borderRadius: 3,
+  background: '#1e1f22', border: '1px solid #3f4147', color: '#d7d9dc',
+  fontSize: 11, fontFamily: 'ui-monospace, monospace',
+};
+const callerChipStyle: React.CSSProperties = {
+  display: 'inline-block', padding: '2px 7px', borderRadius: 3,
+  background: '#1e1f22', border: '1px dashed #3f4147', color: '#9ca0a8',
+  fontSize: 11, fontFamily: 'ui-monospace, monospace',
+};
+
+// ─── Immediate Fixes + Refactor Candidates styles ─────────────────────
+
+const fixRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'auto auto auto 1fr auto',
+  alignItems: 'center',
+  gap: 0,
+  background: '#26282c',
+  border: '1px solid #3f4147',
+  borderRadius: 4,
+  padding: '8px 12px',
+  marginBottom: 6,
+};
+const fixMessageStyle: React.CSSProperties = {
+  gridColumn: '1 / -1',
+  marginTop: 6,
+  color: '#d7d9dc',
+  fontSize: 12,
+  lineHeight: 1.4,
+};
+const effortPillStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 7px',
+  borderRadius: 3,
+  color: '#0a0a14',
+  fontSize: 9,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.3,
+};
+const refactorRowStyle: React.CSSProperties = {
+  display: 'block',
+  background: '#26282c',
+  border: '1px solid #3f4147',
+  borderRadius: 4,
+  padding: '10px 12px',
+  marginBottom: 8,
+};
+const refactorHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+};
+const refactorWhyStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  color: '#d7d9dc',
+  lineHeight: 1.4,
+};
+const refactorMetricsRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 14,
+  marginTop: 8,
+  alignItems: 'center',
+};
+const metricInlineStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  flexDirection: 'column',
+};
+const metricKeyStyle: React.CSSProperties = {
+  fontSize: 9,
+  color: '#7e8189',
+  textTransform: 'uppercase',
+  letterSpacing: 0.4,
+};
+const metricValueStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#d7d9dc',
+  fontWeight: 600,
 };

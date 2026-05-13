@@ -134,6 +134,11 @@
           "type": "array",
           "items": { "$ref": "#/$defs/FindingTopRef" },
           "description": "Top-N findings as `(node_id, kind, severity, line)` triples, sorted by severity DESC. The viewer resolves `node_id` via its existing call-tree node index."
+        },
+        "roots_overview": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RootOverview" },
+          "description": "Per-entry-point rollup: subtree share, categories reached, findings by severity, first callees, callers. Mirrors pprof's `top -cum` at root granularity."
         }
       }
     },
@@ -407,6 +412,12 @@
       "description": "Finding severity. Bumped by impact signals (subtree reach, pagerank, call-site count) via `bump_by_impact`."
     },
 
+    "Effort": {
+      "type": "string",
+      "enum": ["trivial", "small", "medium", "large"],
+      "description": "Rough fix-cost estimate. Composes with severity into 'immediate fixes' (high × trivial/small) and 'refactor candidates' (large or multi-finding clusters). Inspired by SonarQube's remediation-time signal."
+    },
+
     "FindingKind": {
       "type": "string",
       "enum": [
@@ -417,7 +428,10 @@
         "noisy_log",
         "outdated_package",
         "memory_explosion",
-        "hot_zone"
+        "hot_zone",
+        "expensive_compute",
+        "missing_caching",
+        "log_amplification"
       ],
       "description": "Closed-set finding kind. New kinds are additive; viewers ignore unknown values."
     },
@@ -440,6 +454,7 @@
       "properties": {
         "kind": { "$ref": "#/$defs/FindingKind" },
         "severity": { "$ref": "#/$defs/Severity" },
+        "effort": { "$ref": "#/$defs/Effort", "description": "Rough fix-cost estimate. Defaults to `medium` if omitted (older fixtures)." },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "line": { "type": "integer", "minimum": 1, "description": "Call-site or relevant line within the symbol — NOT the symbol-start line." },
         "message": { "type": "string" },
@@ -460,6 +475,114 @@
         "kind": { "$ref": "#/$defs/FindingKind" },
         "severity": { "$ref": "#/$defs/Severity" },
         "line": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "RootOverview": {
+      "type": "object",
+      "description": "Per-entry-point rollup. One row per `Report.entries[i]`, derived from data already on `CallTreeNode`.",
+      "required": [
+        "node_id", "name", "file", "line", "kind",
+        "subtree_size", "percent_of_all_roots", "findings_total"
+      ],
+      "properties": {
+        "node_id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+        "kind": { "type": "string", "enum": ["Function", "Method", "Class", "Lambda", "Native"] },
+        "subtree_size": { "type": "integer", "minimum": 1 },
+        "percent_of_all_roots": { "type": "number", "minimum": 0, "maximum": 100 },
+        "categories_reached": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "findings_by_severity": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "findings_total": { "type": "integer", "minimum": 0 },
+        "callers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RootCallerSummary" },
+          "description": "In-graph callers of this root. Empty for true entry points (HTTP handlers, main)."
+        },
+        "first_callees": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RootCalleeSummary" },
+          "description": "Up to 5 direct callees — `where does this root go first?`"
+        }
+      }
+    },
+
+    "RootCallerSummary": {
+      "type": "object",
+      "required": ["node_id", "name", "file", "line"],
+      "properties": {
+        "node_id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] }
+      }
+    },
+
+    "RootCalleeSummary": {
+      "type": "object",
+      "required": ["node_id", "name", "file", "line", "subtree_size"],
+      "properties": {
+        "node_id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+        "subtree_size": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "ImmediateFix": {
+      "type": "object",
+      "description": "Quick-win row in `Summary.immediate_fixes` — a finding that's high severity AND trivial/small effort.",
+      "required": ["node_id", "name", "file", "line", "kind", "severity", "effort", "message"],
+      "properties": {
+        "node_id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+        "kind": { "$ref": "#/$defs/FindingKind" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "effort": { "$ref": "#/$defs/Effort" },
+        "message": { "type": "string" }
+      }
+    },
+
+    "RefactorCandidate": {
+      "type": "object",
+      "description": "Symbol-level aggregate in `Summary.refactor_candidates` — this whole unit needs a serious look, not a one-line patch.",
+      "required": [
+        "node_id", "name", "file", "line",
+        "findings_count", "kinds", "worst_severity", "max_effort",
+        "complexity", "loc", "percent_total", "why"
+      ],
+      "properties": {
+        "node_id": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "parent_class": { "type": ["string", "null"] },
+        "findings_count": { "type": "integer", "minimum": 1 },
+        "kinds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FindingKind" }
+        },
+        "worst_severity": { "$ref": "#/$defs/Severity" },
+        "max_effort": { "$ref": "#/$defs/Effort" },
+        "complexity": { "type": "integer", "minimum": 0 },
+        "loc": { "type": "integer", "minimum": 0 },
+        "percent_total": { "type": "number", "minimum": 0, "maximum": 100 },
+        "why": { "type": "string", "description": "Pre-rendered human reason." }
       }
     }
   }

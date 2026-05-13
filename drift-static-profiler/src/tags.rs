@@ -146,6 +146,19 @@ pub fn extract_tags_from_source(
         }
     }
 
+    // Python `if __name__ == "__main__":` blocks and TS/JS top-level
+    // executable statements aren't function bodies — tree-sitter doesn't
+    // emit them as `def.function`. Without help, every reference inside
+    // such code gets `in_symbol = None` and is silently dropped by the
+    // graph builder, which means:
+    //   - their callees miss a caller edge
+    //   - functions reachable ONLY from `__main__` end up in `dead_code`
+    //
+    // Fix: synthesize a `<module>` symbol covering the whole file IFF the
+    // file actually has orphan references. The synthetic name uses angle
+    // brackets so it's unambiguous (no real identifier looks like that).
+    add_synthetic_module_symbol(path, source, &mut symbols, &references);
+
     resolve_containment(&mut symbols, &mut references);
 
     Ok(FileTags {
@@ -156,6 +169,58 @@ pub fn extract_tags_from_source(
         imports,
         bindings: Vec::new(),
     })
+}
+
+/// Push a synthetic `<module>` Symbol when the file has references that
+/// don't fall inside any other symbol's byte range — i.e. module-level
+/// executable code (Python `if __name__ == "__main__":`, TS/JS top-level
+/// statements). Conservative: emits NOTHING for files where every
+/// reference is inside a function/method.
+fn add_synthetic_module_symbol(
+    path: &Path,
+    source: &str,
+    symbols: &mut Vec<Symbol>,
+    references: &[Reference],
+) {
+    let has_orphan_ref = references.iter().any(|r| {
+        !symbols
+            .iter()
+            .any(|s| s.byte_start <= r.byte_offset && r.byte_offset <= s.byte_end)
+    });
+    if !has_orphan_ref {
+        return;
+    }
+    // Line count: cheap, source.lines() handles the trailing-newline case.
+    let line_count = source.lines().count().max(1);
+    symbols.push(Symbol {
+        name: "<module>".to_string(),
+        // Function is the closest existing kind — module-level code
+        // behaves like an implicit main(). Avoids inventing a new
+        // SymbolKind variant just for this case.
+        kind: SymbolKind::Function,
+        file: path.to_path_buf(),
+        line: 1,
+        line_end: line_count,
+        // Spans the whole file so any reference outside other symbols'
+        // ranges resolves to this one. resolve_containment picks the
+        // SMALLEST enclosing symbol, so references inside real functions
+        // still bind to those — only the truly module-level refs land
+        // here.
+        byte_start: 0,
+        byte_end: source.len(),
+        parent: None,
+        // Metrics intentionally conservative: we don't analyze
+        // module-level control flow (rare, and the language-specific
+        // walker isn't run over it). Better to under-report than to
+        // pollute the metrics with a fake-high value.
+        loc: line_count,
+        complexity: 1,
+        nesting_depth: 0,
+        parameter_count: 0,
+        is_async: false,
+        loop_ranges: Vec::new(),
+        await_ranges: Vec::new(),
+    });
 }
 
 fn rightmost_id(receiver: &str) -> &str {
@@ -175,6 +240,16 @@ fn resolve_containment(symbols: &mut [Symbol], references: &mut [Reference]) {
         let mut best: Option<&Symbol> = None;
         for cand in &cloned {
             if std::ptr::eq(cand, s) {
+                continue;
+            }
+            // Don't let the synthetic `<module>` symbol become a parent.
+            // `parent` is read by graph.rs as the "enclosing class /
+            // function" for SymbolId construction and as `parent_class`
+            // in the viewer; promoting `<module>` to that role would
+            // pollute every top-level function's SymbolId and chip text.
+            // References still pick `<module>` via the loop below — that
+            // path is unchanged.
+            if is_synthetic_module_name(&cand.name) {
                 continue;
             }
             if cand.byte_start <= s.byte_start
@@ -204,4 +279,11 @@ fn resolve_containment(symbols: &mut [Symbol], references: &mut [Reference]) {
         }
         r.in_symbol = best.map(|s| s.name.clone());
     }
+}
+
+/// True for profiler-internal synthetic symbol names — currently just
+/// `<module>`. The leading `<` makes these unambiguous: no real
+/// identifier in any of the seven supported languages can contain it.
+fn is_synthetic_module_name(name: &str) -> bool {
+    name == "<module>"
 }

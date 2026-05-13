@@ -16,7 +16,7 @@ use crate::{
     roots::{discover_roots, DiscoverOpts, DiscoveredRoot},
     tags::extract_tags,
     tree::{CallTreeNode, TreeBuilder},
-    walker::discover_source_files,
+    walker::{discover_source_files_with, WalkOpts},
     FileTags, Language,
 };
 
@@ -24,6 +24,11 @@ use crate::{
 pub struct AnalyzeOptions {
     pub max_depth: usize,
     pub skip_accessors: bool,
+    /// Walker-level filter: skip test/spec/mock files entirely so they
+    /// don't appear as roots, callees, dead_code, or anywhere in the
+    /// graph. Off by default — the historical scan walks tests.
+    /// Forwarded to `WalkOpts.exclude_tests` in `build_graph_context`.
+    pub exclude_tests: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -31,6 +36,7 @@ impl Default for AnalyzeOptions {
         Self {
             max_depth: 12,
             skip_accessors: false,
+            exclude_tests: false,
         }
     }
 }
@@ -65,17 +71,29 @@ struct GraphContext {
     profiled_language: Option<Language>,
 }
 
-fn build_graph_context(root: &Path) -> GraphContext {
+fn build_graph_context(root: &Path, opts: &AnalyzeOptions) -> GraphContext {
     // 1. Compute a GitHub-Linguist-style language breakdown of the whole
     //    tree. This honors the same .gitignore / .driftignore / default-skip
     //    rules as source discovery, so build output and vendored deps don't
     //    skew the percentages.
+    //
+    // Note: the language breakdown intentionally walks WITHOUT the
+    // exclude_tests filter so the language %s reflect the WHOLE repo
+    // (e.g. "this project is 78% TypeScript") — independent of which
+    // subset of files we then analyze. Excluding tests there would
+    // produce surprising percentages.
     let language_stats = compute_language_stats(root);
     let profiled_language = language_stats.dominant_supported;
 
-    // 2. Walk for source files (still all four supported languages), then
-    //    filter down to the dominant supported language.
-    let all_files = discover_source_files(root);
+    // 2. Walk for source files (still all seven supported languages),
+    //    then filter down to the dominant supported language. The
+    //    exclude_tests flag IS applied here so the graph itself doesn't
+    //    see test files when the caller asked for them dropped.
+    let walk_opts = WalkOpts {
+        exclude_tests: opts.exclude_tests,
+        ..WalkOpts::default()
+    };
+    let all_files = discover_source_files_with(root, &walk_opts);
     let files: Vec<_> = match profiled_language {
         Some(lang) => all_files.into_iter().filter(|(_, l)| *l == lang).collect(),
         None => Vec::new(),
@@ -116,7 +134,7 @@ fn build_trees_from_ids(
 }
 
 pub fn analyze(root: &Path, entries: &[String], opts: &AnalyzeOptions) -> Result<AnalyzeOutcome> {
-    let ctx = build_graph_context(root);
+    let ctx = build_graph_context(root, opts);
 
     let mut entry_ids = Vec::new();
     let mut unresolved = Vec::new();
@@ -153,7 +171,7 @@ pub fn analyze_roots(
     discover: &DiscoverOpts,
     opts: &AnalyzeOptions,
 ) -> Result<AnalyzeOutcome> {
-    let ctx = build_graph_context(root);
+    let ctx = build_graph_context(root, opts);
     let discovered = discover_roots(&ctx.graph, root, discover);
     let ids: Vec<_> = discovered.iter().map(|r| r.id.clone()).collect();
     let roots = build_trees_from_ids(&ctx, root, &ids, opts);

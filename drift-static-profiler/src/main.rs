@@ -31,6 +31,10 @@ enum Cmd {
         /// Hide trivial getX/setX/isX accessors in the tree
         #[arg(long)]
         no_accessors: bool,
+        /// Exclude test/spec/mock files entirely (path segments + filename
+        /// conventions). See `walker::is_test_path` for the full rule.
+        #[arg(long)]
+        no_tests: bool,
     },
     /// Dump all extracted tags (definitions + references) for a project.
     Tags {
@@ -62,6 +66,11 @@ enum Cmd {
         /// Hide trivial getX/setX/isX accessors in the tree
         #[arg(long)]
         no_accessors: bool,
+        /// Exclude test/spec/mock files entirely (path segments like
+        /// `tests/`, `__tests__/`, `spec/` AND filename conventions like
+        /// `*.test.ts`, `*_test.go`, `test_*.py`, `*Test.java`).
+        #[arg(long)]
+        no_tests: bool,
         /// Also print the ASCII call tree to stdout
         #[arg(long)]
         print: bool,
@@ -111,6 +120,13 @@ enum Cmd {
         /// roots-list filter.
         #[arg(long)]
         no_accessors: bool,
+        /// Exclude test/spec/mock files from the WALK entirely — different
+        /// from `--include-tests`, which only controls the discovery filter
+        /// (root candidates). With `--no-tests`, test files don't reach the
+        /// graph at all, so they don't show up as dead_code, callees, or in
+        /// `findings_top`. Implies `--no-tests` semantics in `roots.rs` too.
+        #[arg(long)]
+        no_tests: bool,
         /// Also print the discovered roots table to stderr
         #[arg(long)]
         print: bool,
@@ -137,7 +153,8 @@ fn main() -> Result<()> {
             json,
             max_depth,
             no_accessors,
-        } => run_analyze(&path, &entry, json, max_depth, no_accessors),
+            no_tests,
+        } => run_analyze(&path, &entry, json, max_depth, no_accessors, no_tests),
         Cmd::Tags { path } => run_tags(&path),
         Cmd::Diff {
             baseline,
@@ -152,8 +169,9 @@ fn main() -> Result<()> {
             out_dir,
             max_depth,
             no_accessors,
+            no_tests,
             print,
-        } => run_scan(&path, &entry, &name, &out_dir, max_depth, no_accessors, print),
+        } => run_scan(&path, &entry, &name, &out_dir, max_depth, no_accessors, no_tests, print),
         Cmd::AnalyzeRoot {
             path,
             name,
@@ -165,6 +183,7 @@ fn main() -> Result<()> {
             include_accessors,
             max_depth,
             no_accessors,
+            no_tests,
             print,
         } => run_analyze_root(
             &path,
@@ -177,6 +196,7 @@ fn main() -> Result<()> {
             include_accessors,
             max_depth,
             no_accessors,
+            no_tests,
             print,
         ),
     }
@@ -214,12 +234,14 @@ fn run_diff(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_analyze(
     root: &std::path::Path,
     entries: &[String],
     json: bool,
     max_depth: usize,
     no_accessors: bool,
+    no_tests: bool,
 ) -> Result<()> {
     if entries.is_empty() {
         eprintln!("note: no --entry given; pass one or more entry-point symbol names");
@@ -232,6 +254,7 @@ fn run_analyze(
         &AnalyzeOptions {
             max_depth,
             skip_accessors: no_accessors,
+            exclude_tests: no_tests,
         },
     )?;
     print_language_summary(&outcome.language_stats);
@@ -260,6 +283,7 @@ fn run_scan(
     out_dir: &std::path::Path,
     max_depth: usize,
     no_accessors: bool,
+    no_tests: bool,
     print: bool,
 ) -> Result<()> {
     let outcome = analyze(
@@ -268,6 +292,7 @@ fn run_scan(
         &AnalyzeOptions {
             max_depth,
             skip_accessors: no_accessors,
+            exclude_tests: no_tests,
         },
     )?;
     print_language_summary(&outcome.language_stats);
@@ -312,8 +337,14 @@ fn run_analyze_root(
     include_accessors: bool,
     max_depth: usize,
     no_accessors: bool,
+    no_tests: bool,
     print: bool,
 ) -> Result<()> {
+    // `--no-tests` (walker-level filter) implies `--no-include-tests`
+    // (discover-roots filter): if test files don't reach the graph at
+    // all, there's no test code left for roots to discover anyway. But
+    // we honor `--include-tests` if the user passes BOTH (they get
+    // whatever the walker emitted). Default behavior unchanged.
     let discover = DiscoverOpts {
         min_reach,
         skip_tests: !include_tests,
@@ -327,6 +358,7 @@ fn run_analyze_root(
         &AnalyzeOptions {
             max_depth,
             skip_accessors: no_accessors,
+            exclude_tests: no_tests,
         },
     )?;
     print_language_summary(&outcome.language_stats);

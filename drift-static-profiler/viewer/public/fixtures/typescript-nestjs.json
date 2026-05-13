@@ -11,8 +11,8 @@
       "typescript"
     ],
     "files": 8,
-    "symbols": 17,
-    "edges": 6,
+    "symbols": 24,
+    "edges": 7,
     "categories": {
       "cache": 0,
       "compute": 0,
@@ -27,6 +27,13 @@
         "name": "Order",
         "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
         "line": 4,
+        "parent_class": null,
+        "count": 1
+      },
+      {
+        "name": "bootstrap",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 5,
         "parent_class": null,
         "count": 1
       },
@@ -75,6 +82,13 @@
         "count": 3
       },
       {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 1,
+        "parent_class": null,
+        "count": 1
+      },
+      {
         "name": "bootstrap",
         "file": "tests/fixtures/typescript-nestjs/src/main.ts",
         "line": 5,
@@ -109,9 +123,30 @@
     ],
     "dead_code": [
       {
-        "name": "bootstrap",
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "<module>",
         "file": "tests/fixtures/typescript-nestjs/src/main.ts",
-        "line": 5,
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
+        "line": 1,
         "parent_class": null,
         "count": 0
       },
@@ -120,6 +155,20 @@
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
         "line": 7,
         "parent_class": "OrdersController",
+        "count": 0
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.module.ts",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
+        "line": 1,
+        "parent_class": null,
         "count": 0
       },
       {
@@ -137,6 +186,13 @@
         "count": 0
       },
       {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
         "name": "constructor",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 8,
@@ -150,70 +206,70 @@
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 10,
         "parent_class": "OrdersService",
-        "score": 0.1172175594345522
+        "score": 0.10511199438667126
       },
       {
         "name": "Order",
         "file": "tests/fixtures/typescript-nestjs/src/orders/order.entity.ts",
         "line": 4,
         "parent_class": null,
-        "score": 0.11441082541460032
+        "score": 0.08631583936421044
       },
       {
         "name": "create",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
         "line": 10,
         "parent_class": "OrdersController",
-        "score": 0.08044000938436506
+        "score": 0.08116969343485304
       },
       {
         "name": "save",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts",
         "line": 13,
         "parent_class": "OrdersRepository",
-        "score": 0.07746163026761434
+        "score": 0.061200649472721864
       },
       {
         "name": "buildOrder",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 16,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761434
+        "score": 0.061200649472721864
       },
       {
         "name": "validate",
         "file": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts",
         "line": 24,
         "parent_class": "OrdersService",
-        "score": 0.07746163026761434
-      },
-      {
-        "name": "AppModule",
-        "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
-        "line": 18,
-        "parent_class": null,
-        "score": 0.04141333772396719
+        "score": 0.061200649472721864
       },
       {
         "name": "bootstrap",
         "file": "tests/fixtures/typescript-nestjs/src/main.ts",
         "line": 5,
         "parent_class": null,
-        "score": 0.04141333772396719
+        "score": 0.05573338160990196
       },
       {
-        "name": "CreateOrderDto",
-        "file": "tests/fixtures/typescript-nestjs/src/orders/create-order.dto.ts",
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
         "line": 1,
         "parent_class": null,
-        "score": 0.04141333772396719
+        "score": 0.02870983192859986
       },
       {
-        "name": "OrdersController",
-        "file": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts",
-        "line": 6,
+        "name": "AppModule",
+        "file": "tests/fixtures/typescript-nestjs/src/app.module.ts",
+        "line": 18,
         "parent_class": null,
-        "score": 0.04141333772396719
+        "score": 0.02870983192859986
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/typescript-nestjs/src/main.ts",
+        "line": 1,
+        "parent_class": null,
+        "score": 0.02870983192859986
       }
     ],
     "recursive_symbols": [],
@@ -237,6 +293,56 @@
         "kind": "blocking_in_async",
         "severity": "high",
         "line": 14
+      }
+    ],
+    "roots_overview": [
+      {
+        "node_id": "tests/fixtures/typescript-nestjs/src/orders/orders.controller.ts::OrdersController::create",
+        "name": "create",
+        "file": "src/orders/orders.controller.ts",
+        "line": 10,
+        "parent_class": "OrdersController",
+        "kind": "Method",
+        "subtree_size": 6,
+        "percent_of_all_roots": 100.0,
+        "categories_reached": {
+          "db": 2
+        },
+        "findings_by_severity": {
+          "high": 1
+        },
+        "findings_total": 1,
+        "callers": [
+          {
+            "node_id": "tests/fixtures/typescript-nestjs/src/main.ts::::bootstrap",
+            "name": "bootstrap",
+            "file": "src/main.ts",
+            "line": 5
+          }
+        ],
+        "first_callees": [
+          {
+            "node_id": "tests/fixtures/typescript-nestjs/src/orders/orders.service.ts::OrdersService::createOrder",
+            "name": "createOrder",
+            "file": "src/orders/orders.service.ts",
+            "line": 10,
+            "parent_class": "OrdersService",
+            "subtree_size": 5
+          }
+        ]
+      }
+    ],
+    "immediate_fixes": [
+      {
+        "node_id": "tests/fixtures/typescript-nestjs/src/orders/orders.repository.ts::OrdersRepository::save",
+        "name": "save",
+        "file": "src/orders/orders.repository.ts",
+        "line": 14,
+        "parent_class": "OrdersRepository",
+        "kind": "blocking_in_async",
+        "severity": "high",
+        "effort": "trivial",
+        "message": "1 I/O call(s) in async `save` are not awaited: repo.save(). These block the event loop — defeating the point of `async`."
       }
     ]
   },
@@ -300,7 +406,7 @@
                   "is_async": false,
                   "call_site_count": 1,
                   "is_recursive": false,
-                  "pagerank": 0.11441082541460032,
+                  "pagerank": 0.08631583936421044,
                   "percent_total": 16.666666666666664,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -330,7 +436,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761434,
+              "pagerank": 0.061200649472721864,
               "percent_total": 33.33333333333333,
               "percent_parent": 40.0,
               "n_plus_one_risk": false,
@@ -368,7 +474,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": false,
-              "pagerank": 0.07746163026761434,
+              "pagerank": 0.061200649472721864,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
@@ -419,7 +525,7 @@
               "is_async": true,
               "call_site_count": 2,
               "is_recursive": false,
-              "pagerank": 0.07746163026761434,
+              "pagerank": 0.061200649472721864,
               "percent_total": 16.666666666666664,
               "percent_parent": 20.0,
               "n_plus_one_risk": false,
@@ -428,6 +534,7 @@
                 {
                   "kind": "blocking_in_async",
                   "severity": "high",
+                  "effort": "trivial",
                   "confidence": 0.8,
                   "line": 14,
                   "message": "1 I/O call(s) in async `save` are not awaited: repo.save(). These block the event loop — defeating the point of `async`.",
@@ -468,7 +575,7 @@
           "is_async": true,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.1172175594345522,
+          "pagerank": 0.10511199438667126,
           "percent_total": 83.33333333333334,
           "percent_parent": 83.33333333333334,
           "n_plus_one_risk": false,
@@ -500,7 +607,7 @@
       "is_async": true,
       "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.08044000938436506,
+      "pagerank": 0.08116969343485304,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,

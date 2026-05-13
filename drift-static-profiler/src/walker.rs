@@ -42,6 +42,12 @@ pub struct WalkOpts {
     pub apply_defaults: bool,
     /// Skip hidden files / dirs (anything starting with `.`).
     pub skip_hidden: bool,
+    /// Skip test/spec/mock files and the test-segment directories that
+    /// hold them. Off by default — the scan walks tests. When on, both
+    /// path segments (e.g. `tests/`, `__tests__/`, `spec/`) AND filename
+    /// conventions (e.g. `*.test.ts`, `*_test.go`, `test_*.py`,
+    /// `*Test.java`) are filtered. See `is_test_path` for the full rule.
+    pub exclude_tests: bool,
 }
 
 impl Default for WalkOpts {
@@ -51,8 +57,69 @@ impl Default for WalkOpts {
             respect_driftignore: true,
             apply_defaults: true,
             skip_hidden: true,
+            exclude_tests: false,
         }
     }
+}
+
+/// Test-file recognition shared by walker filtering AND roots discovery
+/// so the definition of "test code" stays consistent across the two
+/// stages. Returns true for paths that are either:
+///   - inside a test/spec subdirectory (tests, test, __tests__, spec,
+///     specs, __mocks__, testdata, fixtures), OR
+///   - have a test-suffix filename per the language's convention:
+///       JS/TS  → `*.test.{ts,tsx,js,jsx}`, `*.spec.*`, `*.mock.*`
+///       Python → `test_*.py`, `*_test.py`
+///       Go     → `*_test.go`
+///       Java   → `*Test.java`, `*Tests.java`
+///       Scala  → `*Spec.scala`, `*Specs.scala`
+///
+/// `root` is used to strip the project-root prefix BEFORE checking path
+/// segments, so a project rooted at e.g. `tests/fixtures/foo/` is not
+/// itself misidentified as test code — only test directories *inside*
+/// the analyzed root count.
+pub fn is_test_path(path: &Path, root: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    // Path segments (test/spec/mock/data buckets).
+    if rel.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
+        matches!(
+            s.as_str(),
+            "tests" | "test" | "__tests__" | "spec" | "specs" | "__mocks__" | "testdata"
+        )
+    }) {
+        return true;
+    }
+    // Filename conventions. We check name-as-given (case-sensitive) for
+    // Java/Scala suffixes (which depend on PascalCase), and a lowercased
+    // copy for the substring-style JS/TS/Python/Go patterns.
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.ends_with("Test.java")
+        || name.ends_with("Tests.java")
+        || name.ends_with("Spec.scala")
+        || name.ends_with("Specs.scala")
+    {
+        return true;
+    }
+    let lname = name.to_ascii_lowercase();
+    if lname.contains(".test.")
+        || lname.contains(".spec.")
+        || lname.contains(".mock.")
+        || lname.contains("_test.")
+        || lname.contains("_spec.")
+        || lname.contains("_mock.")
+    {
+        return true;
+    }
+    if lname.starts_with("test_") && lname.ends_with(".py") {
+        return true;
+    }
+    if lname.ends_with("_test.go") {
+        return true;
+    }
+    false
 }
 
 /// Convenience wrapper using sensible defaults. Used by the CLI.
@@ -105,6 +172,9 @@ pub fn walk_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf, u64)> {
         }
         let path = entry.path();
         if opts.apply_defaults && hits_default_ignore(path) {
+            continue;
+        }
+        if opts.exclude_tests && is_test_path(path, root) {
             continue;
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);

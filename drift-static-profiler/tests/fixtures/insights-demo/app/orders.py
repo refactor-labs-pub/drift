@@ -19,8 +19,10 @@ class OrderRepository:
         self.session = session
 
     def save_each(self, orders):
-        # SMELL: n_plus_one — db calls inside a loop
+        # SMELL: n_plus_one AND noisy_log on the SAME symbol — refactor
+        # candidate cluster (two findings on one node).
         for o in orders:
+            logger.info("saving order %s", o)
             self.session.add(o)
             self.session.commit()
         return orders

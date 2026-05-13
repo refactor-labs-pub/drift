@@ -94,9 +94,31 @@ pub fn discover_roots(
             if matches!(sym.kind, SymbolKind::Class) {
                 return false;
             }
-            // In-degree == 0 in the project graph.
-            let callers = graph.callers.get(*id).map(|v| v.len()).unwrap_or(0);
-            if callers != 0 {
+            // In-degree == 0 in the project graph — but count only REAL
+            // callers. Synthetic `<module>` symbols represent file-load
+            // execution, not actual call edges that disqualify a target
+            // from being a root. Without this filter, any function
+            // invoked at module level (e.g. `processPastOrdersLinkingLogic()`
+            // at the bottom of a TS file, or anything inside Python's
+            // `if __name__ == "__main__":`) would silently disappear
+            // from the discovered-roots list — even though it IS the
+            // named entry point developers think about.
+            let real_caller_count = graph
+                .callers
+                .get(*id)
+                .map(|v| {
+                    v.iter()
+                        .filter(|cid| {
+                            graph
+                                .symbols
+                                .get(*cid)
+                                .map(|s| !crate::insights::is_synthetic_symbol(&s.name))
+                                .unwrap_or(true)
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            if real_caller_count != 0 {
                 return false;
             }
             if opts.skip_accessors && is_accessor(&sym.name) {
@@ -168,14 +190,9 @@ fn is_private(name: &str) -> bool {
     name.starts_with('_')
 }
 
-/// True when `path` lives in a test/spec subdirectory *relative to the
-/// project root*. We strip the project-root prefix first so that a project
-/// rooted at, say, `tests/fixtures/foo/` is not itself misidentified as
-/// "test code" — only test directories *inside* the analyzed root count.
+/// Delegate to the shared `walker::is_test_path` so root-discovery
+/// agrees with walker filtering on what counts as "test code".
+/// Kept as a thin wrapper for readability at the call site.
 fn in_test_path(path: &Path, root_dir: &Path) -> bool {
-    let rel = path.strip_prefix(root_dir).unwrap_or(path);
-    rel.components().any(|c| {
-        let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
-        matches!(s.as_str(), "tests" | "test" | "__tests__" | "spec" | "specs")
-    })
+    crate::walker::is_test_path(path, root_dir)
 }

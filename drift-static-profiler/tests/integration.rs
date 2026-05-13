@@ -1384,6 +1384,928 @@ def process_items(items):
 }
 
 #[test]
+fn expensive_compute_emits_finding_for_high_complexity_body() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("expensive_compute_emits_finding_for_high_complexity_body", "(synthetic)");
+
+    // 11 if/elif branches → cyclomatic complexity ~12. Crosses the
+    // detector's ≥10 high-complexity threshold.
+    let src = "
+def classify(score):
+    if score < 0:
+        return 'invalid'
+    elif score < 10:
+        return 'tier_1'
+    elif score < 20:
+        return 'tier_2'
+    elif score < 30:
+        return 'tier_3'
+    elif score < 40:
+        return 'tier_4'
+    elif score < 50:
+        return 'tier_5'
+    elif score < 60:
+        return 'tier_6'
+    elif score < 70:
+        return 'tier_7'
+    elif score < 80:
+        return 'tier_8'
+    elif score < 90:
+        return 'tier_9'
+    else:
+        return 'tier_10'
+";
+    let tags = extract_tags_from_source(Path::new("expensive.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let id = graph.find_entry_points("classify").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let ec = node
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::ExpensiveCompute)
+        .unwrap_or_else(|| panic!(
+            "expensive_compute finding expected on complexity={} symbol",
+            node.complexity,
+        ));
+    assert!(ec.message.contains("complexity"), "message must cite complexity");
+    assert!(ec.remediation.is_some(), "expensive_compute should ship remediation");
+}
+
+#[test]
+fn no_expensive_compute_for_trivial_function() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("no_expensive_compute_for_trivial_function", "(synthetic)");
+
+    let src = "
+def add(a, b):
+    return a + b
+";
+    let tags = extract_tags_from_source(Path::new("trivial.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let id = graph.find_entry_points("add").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    assert!(
+        !node.findings.iter().any(|f| f.kind == FindingKind::ExpensiveCompute),
+        "trivial 1-line function should NOT trigger expensive_compute",
+    );
+}
+
+#[test]
+fn is_test_path_recognizes_all_seven_language_conventions() {
+    // Single source of truth for "what counts as a test path?". Pin
+    // each convention so adding a language or extending the pattern
+    // list later doesn't silently regress one of them.
+    use drift_static_profiler::walker::is_test_path;
+    use std::path::{Path, PathBuf};
+    banner("is_test_path_recognizes_all_seven_language_conventions", "(unit)");
+
+    let root = PathBuf::from("/proj");
+
+    // ─── Path-segment matches (apply to all languages) ──────────────
+    for p in [
+        "/proj/tests/foo.py",
+        "/proj/test/foo.py",
+        "/proj/__tests__/foo.ts",
+        "/proj/spec/foo.rb",
+        "/proj/specs/foo.scala",
+        "/proj/__mocks__/foo.ts",
+        "/proj/testdata/golden.json",
+        "/proj/src/nested/__tests__/inner.ts",
+    ] {
+        assert!(is_test_path(Path::new(p), &root), "should be test: {p}");
+    }
+
+    // ─── Filename-pattern matches (per language convention) ─────────
+    let cases = [
+        // JS/TS
+        ("/proj/src/app.test.ts", true),
+        ("/proj/src/app.test.tsx", true),
+        ("/proj/src/app.spec.js", true),
+        ("/proj/src/api.mock.ts", true),
+        ("/proj/src/util_test.js", true),
+        // Python
+        ("/proj/src/test_utils.py", true),
+        ("/proj/src/utils_test.py", true),
+        // Go
+        ("/proj/pkg/util_test.go", true),
+        // Java
+        ("/proj/src/UserTest.java", true),
+        ("/proj/src/UserTests.java", true),
+        // Scala
+        ("/proj/src/UserSpec.scala", true),
+        ("/proj/src/UserSpecs.scala", true),
+    ];
+    for (p, expected) in cases {
+        assert_eq!(
+            is_test_path(Path::new(p), &root),
+            expected,
+            "is_test_path({p:?}) wrong",
+        );
+    }
+
+    // ─── Production code must NOT match ─────────────────────────────
+    for p in [
+        "/proj/src/app.py",
+        "/proj/src/users.ts",
+        "/proj/src/handler.go",
+        "/proj/src/User.java",
+        "/proj/src/UserService.scala",
+        "/proj/Spec.ts",                   // bare 'Spec.ts' isn't *.spec.* or *Spec.scala
+        "/proj/src/contest.py",            // "test" substring inside an unrelated word
+        "/proj/src/protester.go",          // not _test.go
+        "/proj/src/test_data_loader.py",   // pytest sees this as test_*.py; we err on the side of YES
+    ] {
+        let result = is_test_path(Path::new(p), &root);
+        let last = p.rsplit('/').next().unwrap();
+        let expected = last.starts_with("test_") && last.ends_with(".py");
+        assert_eq!(result, expected, "is_test_path({p:?}) wrong (expected {expected})");
+    }
+
+    // ─── Project-root strip: a project ROOTED inside a `tests/` dir
+    //     is NOT itself test code. Only test subdirs INSIDE the
+    //     scanned root count.
+    let root_in_tests = PathBuf::from("/some/wrapper/tests/fixtures/python-fastapi");
+    let inside = Path::new("/some/wrapper/tests/fixtures/python-fastapi/app/routes.py");
+    assert!(
+        !is_test_path(inside, &root_in_tests),
+        "files inside a project that itself lives under tests/ must not be flagged"
+    );
+}
+
+#[test]
+fn walker_exclude_tests_drops_test_files_at_walk_stage() {
+    // End-to-end at the walker layer: build a fake project tree with
+    // tests + prod files, walk both with and without exclude_tests,
+    // verify the second walk drops every test path.
+    use drift_static_profiler::walker::{discover_source_files_with, WalkOpts};
+    use std::fs;
+    use std::path::PathBuf;
+    banner("walker_exclude_tests_drops_test_files_at_walk_stage", "(walker)");
+
+    let pid = std::process::id();
+    let root: PathBuf = std::env::temp_dir().join(format!("drift-walker-notests-{pid}"));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::create_dir_all(root.join("src/__tests__")).unwrap();
+    fs::create_dir_all(root.join("__mocks__")).unwrap();
+
+    fs::write(root.join("src/app.py"), "x = 1").unwrap();
+    fs::write(root.join("src/utils.py"), "x = 1").unwrap();
+    fs::write(root.join("src/app.test.py"), "x = 1").unwrap();           // filename pattern
+    fs::write(root.join("tests/test_app.py"), "x = 1").unwrap();         // path segment
+    fs::write(root.join("src/__tests__/inner.py"), "x = 1").unwrap();    // nested path segment
+    fs::write(root.join("__mocks__/api.py"), "x = 1").unwrap();          // mocks dir
+
+    let default_opts = WalkOpts::default();
+    let with_tests = discover_source_files_with(&root, &default_opts);
+    let no_tests = discover_source_files_with(
+        &root,
+        &WalkOpts { exclude_tests: true, ..WalkOpts::default() },
+    );
+
+    // Default walk: everything (6 files).
+    assert_eq!(
+        with_tests.len(),
+        6,
+        "default walker should include all 6 .py files; got {:?}",
+        with_tests.iter().map(|(p, _)| p.strip_prefix(&root).unwrap().display().to_string()).collect::<Vec<_>>(),
+    );
+    // exclude_tests=true: only src/app.py + src/utils.py (2 files).
+    let names: Vec<String> = no_tests
+        .iter()
+        .map(|(p, _)| p.strip_prefix(&root).unwrap().display().to_string())
+        .collect();
+    assert_eq!(no_tests.len(), 2, "exclude_tests should keep exactly 2 files; got {names:?}");
+    assert!(names.iter().any(|n| n.ends_with("src/app.py")));
+    assert!(names.iter().any(|n| n.ends_with("src/utils.py")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn analyze_options_exclude_tests_keeps_tests_out_of_the_graph() {
+    // End-to-end at the api.rs layer: tests must not appear in the
+    // graph's symbols/edges/dead_code when AnalyzeOptions.exclude_tests
+    // is true.
+    use drift_static_profiler::{analyze_roots, roots::DiscoverOpts, AnalyzeOptions};
+    use std::fs;
+    use std::path::PathBuf;
+    banner("analyze_options_exclude_tests_keeps_tests_out_of_the_graph", "(api)");
+
+    let pid = std::process::id();
+    let root: PathBuf = std::env::temp_dir().join(format!("drift-analyze-notests-{pid}"));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::write(root.join("src/app.py"), "def handler(): return 1\n").unwrap();
+    fs::write(root.join("tests/test_app.py"), "def test_handler(): return 1\n").unwrap();
+
+    // Default (exclude_tests=false): tests are walked, both symbols exist.
+    let with_tests = analyze_roots(&root, &DiscoverOpts::default(), &AnalyzeOptions::default()).unwrap();
+    assert_eq!(with_tests.report.summary.files, 2, "default walks both files");
+
+    // With exclude_tests=true: test_handler should be GONE from the symbol set.
+    let no_tests = analyze_roots(
+        &root,
+        &DiscoverOpts::default(),
+        &AnalyzeOptions { exclude_tests: true, ..AnalyzeOptions::default() },
+    )
+    .unwrap();
+    assert_eq!(no_tests.report.summary.files, 1, "exclude_tests drops tests/test_app.py");
+    assert_eq!(no_tests.report.summary.symbols, 1, "only `handler` should remain");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn module_level_calls_and_main_block_route_through_synthetic_module_symbol() {
+    // Without the `<module>` synthetic symbol, references at module
+    // level (Python `if __name__ == "__main__":`, TS/JS top-level
+    // statements) get `in_symbol = None` and are silently dropped by
+    // the graph builder. That misclassifies their callees as dead code.
+    use drift_static_profiler::{
+        graph::CallGraph,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner(
+        "module_level_calls_and_main_block_route_through_synthetic_module_symbol",
+        "(synthetic Python script)",
+    );
+
+    // Three call sites at module level:
+    //  - `setup_db()` at top level
+    //  - `run_pipeline()` and `reachable_only_from_main()` inside `__main__`
+    // Plus one in-function call (run_pipeline → setup_db).
+    let src = "
+def setup_db():
+    return 'db'
+
+def run_pipeline():
+    setup_db()
+    return 42
+
+def reachable_only_from_main():
+    return 'hello'
+
+# top-level / module-init code
+setup_db()
+
+if __name__ == '__main__':
+    run_pipeline()
+    reachable_only_from_main()
+";
+    let tags = extract_tags_from_source(Path::new("script.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    // 1. The synthetic <module> symbol exists.
+    let module_id = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "<module>")
+        .map(|(id, _)| id.clone())
+        .expect("`<module>` synthetic symbol should be created for files with orphan refs");
+
+    // 2. Module-level calls now resolve to edges from <module>.
+    let module_callees = graph.callees(&module_id);
+    let callee_names: std::collections::HashSet<&str> = module_callees
+        .iter()
+        .filter_map(|c| graph.symbols.get(c).map(|s| s.name.as_str()))
+        .collect();
+    assert!(callee_names.contains("setup_db"), "<module> should call setup_db (top-level)");
+    assert!(callee_names.contains("run_pipeline"), "<module> should call run_pipeline (__main__)");
+    assert!(
+        callee_names.contains("reachable_only_from_main"),
+        "<module> should call reachable_only_from_main (__main__)",
+    );
+
+    // 3. setup_db now has 2 callers (in-function + module-level).
+    let setup_db_callers = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "setup_db")
+        .map(|(id, _)| graph.callers_of(id).len())
+        .unwrap_or(0);
+    assert!(
+        setup_db_callers >= 2,
+        "setup_db should have ≥2 callers (run_pipeline + <module>), got {setup_db_callers}",
+    );
+
+    // 4. The full report no longer flags reachable_only_from_main as dead_code.
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let entries: Vec<_> = graph
+        .symbols
+        .iter()
+        .filter(|(id, _)| graph.callers_of(id).is_empty())
+        .filter_map(|(id, _)| tb.build(id))
+        .collect();
+    let report = Report::build(&[tags], &graph, entries, &Default::default(), None);
+    assert!(
+        !report
+            .summary
+            .dead_code
+            .iter()
+            .any(|d| d.name == "reachable_only_from_main"),
+        "reachable_only_from_main is reached from __main__; it must NOT be dead_code. Got dead_code: {:?}",
+        report.summary.dead_code.iter().map(|d| &d.name).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn function_called_only_from_module_level_is_still_a_discovered_root() {
+    // Regression: when the synthetic `<module>` symbol picks up
+    // module-level invocations (e.g. TS `processPastOrdersLinkingLogic()`
+    // at the bottom of a file, or Python `if __name__ == "__main__":
+    // run()`), the called function gains 1 caller (`<module>`). That
+    // would normally disqualify it from root discovery — but a function
+    // called only from module load is still a named entry-point the
+    // developer thinks about. discover_roots must count only REAL
+    // (non-synthetic) callers.
+    use drift_static_profiler::{
+        graph::CallGraph,
+        roots::{discover_roots, DiscoverOpts},
+        tags::extract_tags_from_source,
+        Language,
+    };
+    use std::path::Path;
+    banner(
+        "function_called_only_from_module_level_is_still_a_discovered_root",
+        "(synthetic TS-shaped script)",
+    );
+
+    // Mirror the user's actual code shape: a function defined at the
+    // top of a file, invoked at module scope. Both `<module>` AND the
+    // function should appear as roots.
+    let src = "
+function processPastOrdersLinkingLogic(): number {
+    return helper();
+}
+
+function helper(): number { return 1; }
+
+// module-level invocation (the file's startup side effect)
+processPastOrdersLinkingLogic();
+";
+    let tags = extract_tags_from_source(
+        Path::new("/proj/src/ppl.ts"),
+        Language::TypeScript,
+        src,
+    )
+    .unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let roots = discover_roots(&graph, Path::new("/proj"), &DiscoverOpts::default());
+    let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
+
+    assert!(
+        names.contains(&"processPastOrdersLinkingLogic"),
+        "processPastOrdersLinkingLogic should be a discovered root even though `<module>` calls it. \
+         Got roots: {names:?}",
+    );
+    assert!(
+        names.contains(&"<module>"),
+        "the synthetic <module> itself should also be a root (its own callers_count=0). \
+         Got roots: {names:?}",
+    );
+}
+
+#[test]
+fn synthetic_module_does_not_pollute_parent_class_of_top_level_functions() {
+    // Regression: the synthetic `<module>` symbol spans the whole file
+    // (byte 0..len), so naive containment logic would assign it as
+    // `parent` of every top-level function. That would change SymbolIds
+    // and pollute the viewer's chip text. resolve_containment must skip
+    // `<module>` when picking parents (but NOT when picking in_symbol).
+    use drift_static_profiler::{
+        graph::CallGraph,
+        tags::extract_tags_from_source,
+        Language,
+    };
+    use std::path::Path;
+    banner(
+        "synthetic_module_does_not_pollute_parent_class_of_top_level_functions",
+        "(synthetic Python script)",
+    );
+
+    let src = "
+def foo(): pass
+def bar(): foo()
+
+# module-level call → forces synthetic <module> creation
+foo()
+";
+    let tags = extract_tags_from_source(Path::new("rg.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+
+    // <module> exists (we forced an orphan ref).
+    assert!(
+        graph.symbols.iter().any(|(_, s)| s.name == "<module>"),
+        "<module> should exist when there are orphan refs",
+    );
+
+    // BUT top-level functions still have parent = None.
+    for name in ["foo", "bar"] {
+        let parent = graph
+            .symbols
+            .iter()
+            .find(|(_, s)| s.name == name)
+            .and_then(|(_, s)| s.parent.clone());
+        assert_eq!(
+            parent, None,
+            "{name} is top-level — parent must remain None, not '<module>'",
+        );
+    }
+
+    // SymbolId of top-level fn does NOT contain `<module>`.
+    let foo_id = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "foo")
+        .map(|(id, _)| id.0.clone())
+        .unwrap();
+    assert!(
+        !foo_id.contains("<module>"),
+        "SymbolId of foo() leaked '<module>': {foo_id}",
+    );
+
+    // <module> can still resolve module-level refs.
+    let module_id = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "<module>")
+        .map(|(id, _)| id.clone())
+        .unwrap();
+    let module_callees: std::collections::HashSet<&str> = graph
+        .callees(&module_id)
+        .iter()
+        .filter_map(|c| graph.symbols.get(c).map(|s| s.name.as_str()))
+        .collect();
+    assert!(
+        module_callees.contains("foo"),
+        "<module> should still call foo (the orphan ref). got {module_callees:?}",
+    );
+}
+
+#[test]
+fn typescript_top_level_call_gets_synthetic_module() {
+    // The TS/JS case: a file that calls something at module scope (the
+    // `app.listen(3000)` / `runIt()` idiom). Same fix as Python's
+    // `__main__` — the module-level call must NOT be silently dropped.
+    use drift_static_profiler::{
+        graph::CallGraph,
+        tags::extract_tags_from_source,
+        Language,
+    };
+    use std::path::Path;
+    banner("typescript_top_level_call_gets_synthetic_module", "(synthetic .ts)");
+
+    let src = "
+function startServer() {
+    return 'listening';
+}
+
+// top-level execution — defines the file's entry behavior
+startServer();
+";
+    let tags = extract_tags_from_source(Path::new("server.ts"), Language::TypeScript, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    let module = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "<module>")
+        .map(|(id, _)| id.clone());
+    assert!(
+        module.is_some(),
+        "TS file with top-level call should get a `<module>` symbol",
+    );
+    let module_id = module.unwrap();
+    let callees: std::collections::HashSet<&str> = graph
+        .callees(&module_id)
+        .iter()
+        .filter_map(|c| graph.symbols.get(c).map(|s| s.name.as_str()))
+        .collect();
+    assert!(
+        callees.contains("startServer"),
+        "<module> should call startServer (the top-level invocation). got {callees:?}",
+    );
+}
+
+#[test]
+fn synthetic_module_does_not_get_false_positive_findings() {
+    // Regression: synthetic `<module>` has `loc = file_line_count` as a
+    // proxy — without skipping it in the detector pass, a 100-line
+    // script would trigger `expensive_compute` on `<module>` just for
+    // being a long file. The fix: collect_node_findings skips synthetic
+    // names entirely.
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("synthetic_module_does_not_get_false_positive_findings", "(big file)");
+
+    // 100 lines of helpers + one module-level call so the synthetic
+    // gets created. The synthetic's `loc` ≥ 80 would otherwise fire
+    // `expensive_compute`.
+    let mut src = String::from("def helper(): return 1\n");
+    for _ in 0..100 {
+        src.push_str("# pad\n");
+    }
+    src.push_str("helper()\n");
+    let tags = extract_tags_from_source(Path::new("big.py"), Language::Python, &src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+
+    let module_id = graph
+        .symbols
+        .iter()
+        .find(|(_, s)| s.name == "<module>")
+        .map(|(id, _)| id.clone())
+        .expect("synthetic <module> should be created (we have an orphan ref)");
+    let sym = graph.symbols.get(&module_id).unwrap();
+    assert!(sym.loc >= 80, "test premise: file is large enough to risk a false positive (got loc={})", sym.loc);
+
+    // Build the tree + report, then verify <module> has NO findings.
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&module_id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let module_node = report.entries.iter().find(|e| e.name == "<module>").unwrap();
+    assert!(
+        module_node.findings.is_empty(),
+        "synthetic <module> must have NO findings, even when file is long. Got: {:?}",
+        module_node.findings.iter().map(|f| f.kind).collect::<Vec<_>>(),
+    );
+    // And it must NOT show up in any of the rollups as a target row.
+    assert!(
+        !report
+            .summary
+            .findings_top
+            .iter()
+            .any(|t| t.node_id == module_id.0 && t.kind != FindingKind::HotZone),
+        "synthetic <module> must not appear in findings_top",
+    );
+    assert!(
+        !report.summary.refactor_candidates.iter().any(|c| c.name == "<module>"),
+        "synthetic <module> must not be a refactor candidate",
+    );
+    assert!(
+        !report.summary.immediate_fixes.iter().any(|f| f.name == "<module>"),
+        "synthetic <module> must not appear in immediate_fixes",
+    );
+}
+
+#[test]
+fn empty_source_does_not_crash_or_produce_synthetic() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        tags::extract_tags_from_source,
+        Language,
+    };
+    use std::path::Path;
+    banner("empty_source_does_not_crash_or_produce_synthetic", "(empty file)");
+
+    let tags = extract_tags_from_source(Path::new("empty.py"), Language::Python, "").unwrap();
+    let graph = CallGraph::build(&[tags]);
+    assert_eq!(graph.symbols.len(), 0, "empty file → no symbols, including synthetic");
+}
+
+#[test]
+fn only_imports_does_not_produce_synthetic() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        tags::extract_tags_from_source,
+        Language,
+    };
+    use std::path::Path;
+    banner("only_imports_does_not_produce_synthetic", "(imports-only file)");
+
+    // Imports are NOT references — they're a separate capture. So a
+    // file that's nothing but imports must NOT trigger the synthetic.
+    let src = "
+import os
+import sys
+from typing import Optional
+";
+    let tags = extract_tags_from_source(Path::new("only_imports.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    assert!(
+        !graph.symbols.iter().any(|(_, s)| s.name == "<module>"),
+        "imports-only file should NOT get a <module> symbol (imports aren't references)",
+    );
+}
+
+#[test]
+fn no_synthetic_module_symbol_when_no_orphan_references() {
+    // A library file with only function bodies (no module-level
+    // executable code) should NOT gain a synthetic <module> symbol.
+    use drift_static_profiler::{
+        graph::CallGraph, tags::extract_tags_from_source, Language,
+    };
+    use std::path::Path;
+    banner("no_synthetic_module_symbol_when_no_orphan_references", "(library-style)");
+
+    let src = "
+def add(a, b):
+    return a + b
+
+def sub(a, b):
+    return a - b
+
+def both(a, b):
+    return add(a, b) + sub(a, b)
+";
+    let tags = extract_tags_from_source(Path::new("lib.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags]);
+    assert!(
+        !graph.symbols.iter().any(|(_, s)| s.name == "<module>"),
+        "library file with no orphan refs should NOT get a <module> symbol",
+    );
+}
+
+#[test]
+fn missing_caching_flags_repeated_pure_complex_callee() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("missing_caching_flags_repeated_pure_complex_callee", "(synthetic)");
+
+    // `score` has cyclomatic complexity ≥ 5 (multiple branches) and is
+    // called from many sites — but has no I/O. Classic memoize candidate.
+    let src = "
+def score(x):
+    if x < 0:
+        return 0
+    elif x < 10:
+        return 1
+    elif x < 20:
+        return 2
+    elif x < 30:
+        return 3
+    elif x < 40:
+        return 4
+    else:
+        return 5
+
+def a(x): return score(x)
+def b(x): return score(x + 1)
+def c(x): return score(x + 2)
+def d(x): return score(x + 3)
+def e(x): return score(x + 4)
+def f(x): return score(x + 5)
+
+def driver(xs):
+    return [a(v) + b(v) + c(v) + d(v) + e(v) + f(v) for v in xs]
+";
+    let tags = extract_tags_from_source(Path::new("memo.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("driver").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let mut found_score_caching = false;
+    fn walk(
+        node: &drift_static_profiler::tree::CallTreeNode,
+        flag: &mut bool,
+    ) {
+        if node.name == "score"
+            && node.findings.iter().any(|f| f.kind == FindingKind::MissingCaching)
+        {
+            *flag = true;
+        }
+        for c in &node.children {
+            walk(c, flag);
+        }
+    }
+    walk(&report.entries[0], &mut found_score_caching);
+    assert!(
+        found_score_caching,
+        "missing_caching should fire on `score` (repeated + complex + pure)",
+    );
+}
+
+#[test]
+fn log_amplification_flags_many_logs_on_high_call_site_symbol() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("log_amplification_flags_many_logs_on_high_call_site_symbol", "(synthetic)");
+
+    // `audit` has three info-level log calls and is called from many sites
+    // (call_site_count ≥ 10) → log amplification candidate.
+    let src = "
+import logging
+log = logging.getLogger(__name__)
+
+def audit(event):
+    log.info('start %s', event)
+    log.info('phase %s', event)
+    log.info('end %s', event)
+
+def a(e): return audit(e)
+def b(e): return audit(e)
+def c(e): return audit(e)
+def d(e): return audit(e)
+def e(e): return audit(e)
+def f(e): return audit(e)
+def g(e): return audit(e)
+def h(e): return audit(e)
+def i(e): return audit(e)
+def j(e): return audit(e)
+
+def driver(events):
+    return [a(x)+b(x)+c(x)+d(x)+e(x)+f(x)+g(x)+h(x)+i(x)+j(x) for x in events]
+";
+    let tags = extract_tags_from_source(Path::new("logamp.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("driver").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let mut hit = false;
+    fn walk(
+        node: &drift_static_profiler::tree::CallTreeNode,
+        flag: &mut bool,
+    ) {
+        if node.name == "audit"
+            && node.findings.iter().any(|f| f.kind == FindingKind::LogAmplification)
+        {
+            *flag = true;
+        }
+        for c in &node.children {
+            walk(c, flag);
+        }
+    }
+    walk(&report.entries[0], &mut hit);
+    assert!(hit, "log_amplification should fire on `audit` (≥3 logs + many call sites)");
+}
+
+#[test]
+fn findings_carry_effort_and_immediate_fixes_lists_quick_wins() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::{Effort, FindingKind, Severity},
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("findings_carry_effort_and_immediate_fixes_lists_quick_wins", "(synthetic)");
+
+    // blocking_in_async = High severity + Trivial effort → should be in
+    // immediate_fixes.
+    let src = "
+import requests
+
+async def fetch_user_blocking(uid):
+    return requests.get(f'https://api.example.com/{uid}')
+";
+    let tags = extract_tags_from_source(Path::new("block.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("fetch_user_blocking").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    // 1. Every finding carries an effort.
+    let bia = report.entries[0]
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::BlockingInAsync)
+        .expect("blocking_in_async finding expected");
+    assert!(matches!(bia.effort, Effort::Trivial), "blocking_in_async should be Trivial effort");
+    assert!(matches!(bia.severity, Severity::High), "blocking_in_async should be High severity");
+
+    // 2. immediate_fixes lists it because it's High + Trivial.
+    assert!(
+        report.summary.immediate_fixes.iter().any(|f| matches!(f.kind, FindingKind::BlockingInAsync)),
+        "immediate_fixes should include the blocking_in_async (high × trivial)",
+    );
+}
+
+#[test]
+fn refactor_candidates_include_nodes_with_finding_clusters() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("refactor_candidates_include_nodes_with_finding_clusters", "(synthetic)");
+
+    // bulk_save: n_plus_one (loop) + noisy_log (loop) on the same symbol.
+    // 2 findings on one node → refactor_candidate.
+    let src = "
+import logging
+from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
+
+def bulk_save(items, session: Session):
+    for it in items:
+        log.info('saving %s', it)
+        session.add(it)
+        session.commit()
+";
+    let tags = extract_tags_from_source(Path::new("cluster.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("bulk_save").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let cluster = report
+        .summary
+        .refactor_candidates
+        .iter()
+        .find(|c| c.name == "bulk_save")
+        .expect("bulk_save should be a refactor candidate (≥2 findings on the same node)");
+    assert!(cluster.findings_count >= 2);
+    assert!(cluster.kinds.len() >= 2, "kinds list should cover both detectors");
+}
+
+#[test]
+fn roots_overview_lists_each_entry_with_categories_and_findings() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("roots_overview_lists_each_entry_with_categories_and_findings", "(synthetic)");
+
+    let src = "
+from sqlalchemy.orm import Session
+
+def bulk_save(items, session: Session):
+    for it in items:
+        session.add(it)
+        session.commit()
+";
+    let tags = extract_tags_from_source(Path::new("nplus1.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("bulk_save").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(&[tags], &graph, vec![node], &Default::default(), None);
+
+    let roots = &report.summary.roots_overview;
+    assert_eq!(roots.len(), 1, "expected one root in summary.roots_overview");
+    let r = &roots[0];
+    assert_eq!(r.name, "bulk_save");
+    assert!(r.percent_of_all_roots > 0.0, "single root should account for >0% of all roots");
+    assert!(
+        r.categories_reached.contains_key("db"),
+        "bulk_save reaches a db call via session.add; got {:?}",
+        r.categories_reached,
+    );
+    assert!(r.findings_total >= 1, "should report at least the n_plus_one finding");
+    let high = r.findings_by_severity.get("high").copied().unwrap_or(0);
+    assert!(high >= 1, "n_plus_one is high severity → severity bucket should reflect that");
+}
+
+#[test]
 fn summary_findings_top_and_by_kind_are_populated() {
     use drift_static_profiler::{
         graph::CallGraph,

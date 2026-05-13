@@ -11,8 +11,8 @@
       "javascript"
     ],
     "files": 4,
-    "symbols": 9,
-    "edges": 4,
+    "symbols": 13,
+    "edges": 7,
     "categories": {
       "cache": 0,
       "compute": 0,
@@ -31,10 +31,31 @@
         "count": 1
       },
       {
+        "name": "OrderService",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 3,
+        "parent_class": null,
+        "count": 1
+      },
+      {
         "name": "buildOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 14,
         "parent_class": "OrderService",
+        "count": 1
+      },
+      {
+        "name": "createOrder",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 8,
+        "parent_class": "OrderService",
+        "count": 1
+      },
+      {
+        "name": "notifyDownstream",
+        "file": "tests/fixtures/javascript-express/src/routes.js",
+        "line": 14,
+        "parent_class": null,
         "count": 1
       },
       {
@@ -53,6 +74,13 @@
       }
     ],
     "top_callees": [
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/routes.js",
+        "line": 1,
+        "parent_class": null,
+        "count": 3
+      },
       {
         "name": "createOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
@@ -79,6 +107,20 @@
     ],
     "dead_code": [
       {
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/db.js",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
         "name": "findById",
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 8,
@@ -86,16 +128,23 @@
         "count": 0
       },
       {
-        "name": "constructor",
-        "file": "tests/fixtures/javascript-express/src/service.js",
-        "line": 4,
-        "parent_class": "OrderService",
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/routes.js",
+        "line": 1,
+        "parent_class": null,
         "count": 0
       },
       {
-        "name": "createOrder",
+        "name": "<module>",
         "file": "tests/fixtures/javascript-express/src/service.js",
-        "line": 8,
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
+        "name": "constructor",
+        "file": "tests/fixtures/javascript-express/src/service.js",
+        "line": 4,
         "parent_class": "OrderService",
         "count": 0
       }
@@ -106,63 +155,70 @@
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.1798976135438916
+        "score": 0.12153807579439584
       },
       {
         "name": "save",
         "file": "tests/fixtures/javascript-express/src/repository.js",
         "line": 4,
         "parent_class": "OrderRepository",
-        "score": 0.12010025631539493
+        "score": 0.0873339562020986
       },
       {
         "name": "buildOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 14,
         "parent_class": "OrderService",
-        "score": 0.12010025631539493
+        "score": 0.0873339562020986
       },
       {
         "name": "validate",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 22,
         "parent_class": "OrderService",
-        "score": 0.12010025631539493
-      },
-      {
-        "name": "findById",
-        "file": "tests/fixtures/javascript-express/src/repository.js",
-        "line": 8,
-        "parent_class": "OrderRepository",
-        "score": 0.0919603235019847
+        "score": 0.0873339562020986
       },
       {
         "name": "notifyDownstream",
         "file": "tests/fixtures/javascript-express/src/routes.js",
         "line": 14,
         "parent_class": null,
-        "score": 0.0919603235019847
+        "score": 0.08134700514006968
       },
       {
         "name": "OrderService",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 3,
         "parent_class": null,
-        "score": 0.0919603235019847
-      },
-      {
-        "name": "constructor",
-        "file": "tests/fixtures/javascript-express/src/service.js",
-        "line": 4,
-        "parent_class": "OrderService",
-        "score": 0.0919603235019847
+        "score": 0.08134700514006968
       },
       {
         "name": "createOrder",
         "file": "tests/fixtures/javascript-express/src/service.js",
         "line": 8,
         "parent_class": "OrderService",
-        "score": 0.0919603235019847
+        "score": 0.08134700514006968
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/db.js",
+        "line": 1,
+        "parent_class": null,
+        "score": 0.062069840029849895
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 1,
+        "parent_class": null,
+        "score": 0.062069840029849895
+      },
+      {
+        "name": "findById",
+        "file": "tests/fixtures/javascript-express/src/repository.js",
+        "line": 8,
+        "parent_class": "OrderRepository",
+        "score": 0.062069840029849895
       }
     ],
     "recursive_symbols": [],
@@ -187,6 +243,45 @@
         "severity": "high",
         "line": 15
       }
+    ],
+    "roots_overview": [
+      {
+        "node_id": "tests/fixtures/javascript-express/src/routes.js::::notifyDownstream",
+        "name": "notifyDownstream",
+        "file": "src/routes.js",
+        "line": 14,
+        "kind": "Function",
+        "subtree_size": 1,
+        "percent_of_all_roots": 100.0,
+        "categories_reached": {
+          "network": 2
+        },
+        "findings_by_severity": {
+          "high": 1
+        },
+        "findings_total": 1,
+        "callers": [
+          {
+            "node_id": "tests/fixtures/javascript-express/src/routes.js::::<module>",
+            "name": "<module>",
+            "file": "src/routes.js",
+            "line": 1
+          }
+        ],
+        "first_callees": []
+      }
+    ],
+    "immediate_fixes": [
+      {
+        "node_id": "tests/fixtures/javascript-express/src/routes.js::::notifyDownstream",
+        "name": "notifyDownstream",
+        "file": "src/routes.js",
+        "line": 15,
+        "kind": "blocking_in_async",
+        "severity": "high",
+        "effort": "trivial",
+        "message": "1 I/O call(s) in async `notifyDownstream` are not awaited: axios.post(). These block the event loop — defeating the point of `async`."
+      }
     ]
   },
   "entries": [
@@ -200,8 +295,16 @@
       "parent_class": null,
       "children": [],
       "truncated_reason": null,
-      "callers": [],
-      "callers_count": 0,
+      "callers": [
+        {
+          "id": "tests/fixtures/javascript-express/src/routes.js::::<module>",
+          "name": "<module>",
+          "file": "src/routes.js",
+          "line": 1,
+          "parent_class": null
+        }
+      ],
+      "callers_count": 1,
       "callees_count": 0,
       "subtree_size": 1,
       "category_self": "network",
@@ -225,9 +328,9 @@
       "nesting_depth": 0,
       "parameter_count": 1,
       "is_async": true,
-      "call_site_count": 0,
+      "call_site_count": 1,
       "is_recursive": false,
-      "pagerank": 0.0919603235019847,
+      "pagerank": 0.08134700514006968,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,
@@ -236,6 +339,7 @@
         {
           "kind": "blocking_in_async",
           "severity": "high",
+          "effort": "trivial",
           "confidence": 0.95,
           "line": 15,
           "message": "1 I/O call(s) in async `notifyDownstream` are not awaited: axios.post(). These block the event loop — defeating the point of `async`.",

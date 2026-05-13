@@ -16,7 +16,7 @@
     "categories": {
       "cache": 0,
       "compute": 0,
-      "db": 4,
+      "db": 2,
       "io": 0,
       "log": 0,
       "network": 3,
@@ -76,14 +76,6 @@
           "Save"
         ],
         "depth": 2,
-        "terminal_category": "db"
-      },
-      {
-        "frames": [
-          "CreateOrder",
-          "Save"
-        ],
-        "depth": 1,
         "terminal_category": "db"
       },
       {
@@ -200,177 +192,36 @@
       }
     ],
     "profiled_language": "Go",
-    "profiled_language_percent": 100.0
+    "profiled_language_percent": 100.0,
+    "roots_overview": [
+      {
+        "node_id": "tests/fixtures/go-gin/handlers/orders_handler.go::::CreateOrder",
+        "name": "CreateOrder",
+        "file": "handlers/orders_handler.go",
+        "line": 24,
+        "kind": "Method",
+        "subtree_size": 5,
+        "percent_of_all_roots": 100.0,
+        "categories_reached": {
+          "db": 2,
+          "network": 3
+        },
+        "findings_by_severity": {},
+        "findings_total": 0,
+        "callers": [],
+        "first_callees": [
+          {
+            "node_id": "tests/fixtures/go-gin/service/orders_service.go::::CreateOrder",
+            "name": "CreateOrder",
+            "file": "service/orders_service.go",
+            "line": 18,
+            "subtree_size": 4
+          }
+        ]
+      }
+    ]
   },
   "entries": [
-    {
-      "id": "tests/fixtures/go-gin/service/orders_service.go::::CreateOrder",
-      "name": "CreateOrder",
-      "kind": "Method",
-      "file": "service/orders_service.go",
-      "line": 18,
-      "depth": 0,
-      "parent_class": null,
-      "children": [
-        {
-          "id": "tests/fixtures/go-gin/service/orders_service.go::::buildOrder",
-          "name": "buildOrder",
-          "kind": "Method",
-          "file": "service/orders_service.go",
-          "line": 29,
-          "depth": 1,
-          "parent_class": null,
-          "children": [],
-          "truncated_reason": null,
-          "callers": [
-            {
-              "id": "tests/fixtures/go-gin/service/orders_service.go::::CreateOrder",
-              "name": "CreateOrder",
-              "file": "service/orders_service.go",
-              "line": 18,
-              "parent_class": null
-            }
-          ],
-          "callers_count": 1,
-          "callees_count": 0,
-          "subtree_size": 1,
-          "category_self": null,
-          "categories_reached": {},
-          "external_calls": [],
-          "complexity": 2,
-          "loc": 10,
-          "nesting_depth": 1,
-          "parameter_count": 3,
-          "is_async": false,
-          "call_site_count": 1,
-          "is_recursive": false,
-          "pagerank": 0.13577645815916128,
-          "percent_total": 25.0,
-          "percent_parent": 25.0,
-          "n_plus_one_risk": false,
-          "blocking_in_async": false
-        },
-        {
-          "id": "tests/fixtures/go-gin/service/orders_service.go::::validate",
-          "name": "validate",
-          "kind": "Method",
-          "file": "service/orders_service.go",
-          "line": 40,
-          "depth": 1,
-          "parent_class": null,
-          "children": [],
-          "truncated_reason": null,
-          "callers": [
-            {
-              "id": "tests/fixtures/go-gin/service/orders_service.go::::CreateOrder",
-              "name": "CreateOrder",
-              "file": "service/orders_service.go",
-              "line": 18,
-              "parent_class": null
-            }
-          ],
-          "callers_count": 1,
-          "callees_count": 0,
-          "subtree_size": 1,
-          "category_self": null,
-          "categories_reached": {},
-          "external_calls": [],
-          "complexity": 3,
-          "loc": 9,
-          "nesting_depth": 1,
-          "parameter_count": 1,
-          "is_async": false,
-          "call_site_count": 1,
-          "is_recursive": false,
-          "pagerank": 0.13577645815916128,
-          "percent_total": 25.0,
-          "percent_parent": 25.0,
-          "n_plus_one_risk": false,
-          "blocking_in_async": false
-        },
-        {
-          "id": "tests/fixtures/go-gin/repo/orders_repo.go::::Save",
-          "name": "Save",
-          "kind": "Method",
-          "file": "repo/orders_repo.go",
-          "line": 23,
-          "depth": 1,
-          "parent_class": null,
-          "children": [],
-          "truncated_reason": null,
-          "callers": [
-            {
-              "id": "tests/fixtures/go-gin/service/orders_service.go::::CreateOrder",
-              "name": "CreateOrder",
-              "file": "service/orders_service.go",
-              "line": 18,
-              "parent_class": null
-            }
-          ],
-          "callers_count": 1,
-          "callees_count": 0,
-          "subtree_size": 1,
-          "category_self": "db",
-          "categories_reached": {
-            "db": 2
-          },
-          "external_calls": [
-            {
-              "name": "Exec",
-              "receiver": "db",
-              "category": "db",
-              "tier": "receiver_pattern",
-              "evidence": "receiver name `db` matches db pattern",
-              "line": 24,
-              "in_loop": false,
-              "in_await": false
-            }
-          ],
-          "complexity": 2,
-          "loc": 10,
-          "nesting_depth": 1,
-          "parameter_count": 1,
-          "is_async": false,
-          "call_site_count": 1,
-          "is_recursive": false,
-          "pagerank": 0.13577645815916128,
-          "percent_total": 25.0,
-          "percent_parent": 25.0,
-          "n_plus_one_risk": false,
-          "blocking_in_async": false
-        }
-      ],
-      "truncated_reason": null,
-      "callers": [
-        {
-          "id": "tests/fixtures/go-gin/handlers/orders_handler.go::::CreateOrder",
-          "name": "CreateOrder",
-          "file": "handlers/orders_handler.go",
-          "line": 24,
-          "parent_class": null
-        }
-      ],
-      "callers_count": 1,
-      "callees_count": 3,
-      "subtree_size": 4,
-      "category_self": null,
-      "categories_reached": {
-        "db": 2
-      },
-      "external_calls": [],
-      "complexity": 3,
-      "loc": 10,
-      "nesting_depth": 1,
-      "parameter_count": 3,
-      "is_async": false,
-      "call_site_count": 1,
-      "is_recursive": false,
-      "pagerank": 0.1662356241980774,
-      "percent_total": 100.0,
-      "percent_parent": 100.0,
-      "n_plus_one_risk": false,
-      "blocking_in_async": false
-    },
     {
       "id": "tests/fixtures/go-gin/handlers/orders_handler.go::::CreateOrder",
       "name": "CreateOrder",

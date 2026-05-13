@@ -11,14 +11,14 @@
       "python"
     ],
     "files": 2,
-    "symbols": 8,
+    "symbols": 9,
     "edges": 4,
     "categories": {
       "cache": 0,
       "compute": 0,
       "db": 3,
       "io": 0,
-      "log": 2,
+      "log": 3,
       "network": 0,
       "queue": 0
     },
@@ -26,14 +26,14 @@
       {
         "name": "walk_tree",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 41,
+        "line": 43,
         "parent_class": null,
         "count": 2
       },
       {
         "name": "descend_children",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 48,
+        "line": 50,
         "parent_class": null,
         "count": 1
       },
@@ -49,21 +49,21 @@
       {
         "name": "process_batch",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 53,
+        "line": 55,
         "parent_class": null,
         "count": 2
       },
       {
         "name": "descend_children",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 48,
+        "line": 50,
         "parent_class": null,
         "count": 1
       },
       {
         "name": "walk_tree",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 41,
+        "line": 43,
         "parent_class": null,
         "count": 1
       }
@@ -87,6 +87,13 @@
     ],
     "dead_code": [
       {
+        "name": "<module>",
+        "file": "tests/fixtures/insights-demo/app/orders.py",
+        "line": 1,
+        "parent_class": null,
+        "count": 0
+      },
+      {
         "name": "__init__",
         "file": "tests/fixtures/insights-demo/app/orders.py",
         "line": 18,
@@ -96,14 +103,14 @@
       {
         "name": "find_each",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 28,
+        "line": 30,
         "parent_class": "OrderRepository",
         "count": 0
       },
       {
         "name": "sync_fetch_in_async",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 36,
+        "line": 38,
         "parent_class": null,
         "count": 0
       }
@@ -112,72 +119,79 @@
       {
         "name": "walk_tree",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 41,
+        "line": 43,
         "parent_class": null,
-        "score": 0.3783592158958909
+        "score": 0.36694536108165043
       },
       {
         "name": "descend_children",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 48,
+        "line": 50,
         "parent_class": null,
-        "score": 0.3694210664056458
+        "score": 0.3584882383982598
       },
       {
         "name": "save_each",
         "file": "tests/fixtures/insights-demo/app/orders.py",
         "line": 21,
         "parent_class": "OrderRepository",
-        "score": 0.055985035618206835
+        "score": 0.052824658585246834
+      },
+      {
+        "name": "<module>",
+        "file": "tests/fixtures/insights-demo/app/orders.py",
+        "line": 1,
+        "parent_class": null,
+        "score": 0.03695695698914049
       },
       {
         "name": "OrderRepository",
         "file": "tests/fixtures/insights-demo/app/orders.py",
         "line": 15,
         "parent_class": null,
-        "score": 0.03924693641605131
+        "score": 0.03695695698914049
       },
       {
         "name": "process_batch",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 53,
+        "line": 55,
         "parent_class": null,
-        "score": 0.03924693641605131
+        "score": 0.03695695698914049
       },
       {
         "name": "sync_fetch_in_async",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 36,
+        "line": 38,
         "parent_class": null,
-        "score": 0.03924693641605131
+        "score": 0.03695695698914049
       },
       {
         "name": "__init__",
         "file": "tests/fixtures/insights-demo/app/orders.py",
         "line": 18,
         "parent_class": "OrderRepository",
-        "score": 0.03924693641605131
+        "score": 0.03695695698914049
       },
       {
         "name": "find_each",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 28,
+        "line": 30,
         "parent_class": "OrderRepository",
-        "score": 0.03924693641605131
+        "score": 0.03695695698914049
       }
     ],
     "recursive_symbols": [
       {
         "name": "walk_tree",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 41,
+        "line": 43,
         "parent_class": null,
         "count": 1
       },
       {
         "name": "descend_children",
         "file": "tests/fixtures/insights-demo/app/orders.py",
-        "line": 48,
+        "line": 50,
         "parent_class": null,
         "count": 1
       }
@@ -185,7 +199,7 @@
     "language_breakdown": [
       {
         "language": "Python",
-        "bytes": 1714,
+        "bytes": 1835,
         "files": 2,
         "percent": 100.0,
         "supported": true
@@ -195,7 +209,7 @@
     "profiled_language_percent": 100.0,
     "findings_by_kind": {
       "n_plus_one": 1,
-      "noisy_log": 1,
+      "noisy_log": 2,
       "recursive": 3
     },
     "findings_top": [
@@ -203,31 +217,129 @@
         "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
         "kind": "n_plus_one",
         "severity": "high",
-        "line": 24
+        "line": 26
+      },
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
+        "kind": "recursive",
+        "severity": "high",
+        "line": 43
+      },
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
+        "kind": "recursive",
+        "severity": "high",
+        "line": 43
       },
       {
         "node_id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
         "kind": "noisy_log",
         "severity": "medium",
-        "line": 58
+        "line": 60
       },
       {
-        "node_id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
-        "kind": "recursive",
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
+        "kind": "noisy_log",
         "severity": "medium",
-        "line": 41
+        "line": 25
       },
       {
         "node_id": "tests/fixtures/insights-demo/app/orders.py::::descend_children",
         "kind": "recursive",
         "severity": "medium",
-        "line": 48
+        "line": 50
+      }
+    ],
+    "roots_overview": [
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
+        "name": "process_batch",
+        "file": "app/orders.py",
+        "line": 55,
+        "kind": "Function",
+        "subtree_size": 5,
+        "percent_of_all_roots": 100.0,
+        "categories_reached": {
+          "db": 3,
+          "log": 3
+        },
+        "findings_by_severity": {
+          "high": 3,
+          "medium": 3
+        },
+        "findings_total": 6,
+        "callers": [],
+        "first_callees": [
+          {
+            "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
+            "name": "save_each",
+            "file": "app/orders.py",
+            "line": 21,
+            "parent_class": "OrderRepository",
+            "subtree_size": 1
+          },
+          {
+            "node_id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
+            "name": "walk_tree",
+            "file": "app/orders.py",
+            "line": 43,
+            "subtree_size": 3
+          }
+        ]
+      }
+    ],
+    "immediate_fixes": [
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
+        "name": "save_each",
+        "file": "app/orders.py",
+        "line": 26,
+        "parent_class": "OrderRepository",
+        "kind": "n_plus_one",
+        "severity": "high",
+        "effort": "small",
+        "message": "2 db call(s) inside a loop in `save_each`: session.add(), session.commit(). Each loop iteration issues a separate query — classic N+1."
       },
       {
-        "node_id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
-        "kind": "recursive",
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
+        "name": "save_each",
+        "file": "app/orders.py",
+        "line": 25,
+        "parent_class": "OrderRepository",
+        "kind": "noisy_log",
         "severity": "medium",
-        "line": 41
+        "effort": "trivial",
+        "message": "1 log call(s) inside a loop in `save_each`. Each iteration writes a line; expect log-pipeline cost proportional to N."
+      },
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
+        "name": "process_batch",
+        "file": "app/orders.py",
+        "line": 60,
+        "kind": "noisy_log",
+        "severity": "medium",
+        "effort": "trivial",
+        "message": "1 log call(s) inside a loop in `process_batch`. Each iteration writes a line; expect log-pipeline cost proportional to N."
+      }
+    ],
+    "refactor_candidates": [
+      {
+        "node_id": "tests/fixtures/insights-demo/app/orders.py::OrderRepository::save_each",
+        "name": "save_each",
+        "file": "app/orders.py",
+        "line": 21,
+        "parent_class": "OrderRepository",
+        "findings_count": 2,
+        "kinds": [
+          "n_plus_one",
+          "noisy_log"
+        ],
+        "worst_severity": "high",
+        "max_effort": "small",
+        "complexity": 2,
+        "loc": 5,
+        "percent_total": 20.0,
+        "why": "2 findings clustered on one symbol (n_plus_one, noisy_log)"
       }
     ]
   },
@@ -237,7 +349,7 @@
       "name": "process_batch",
       "kind": "Function",
       "file": "app/orders.py",
-      "line": 53,
+      "line": 55,
       "depth": 0,
       "parent_class": null,
       "children": [
@@ -256,7 +368,7 @@
               "id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
               "name": "process_batch",
               "file": "app/orders.py",
-              "line": 53,
+              "line": 55,
               "parent_class": null
             }
           ],
@@ -265,16 +377,27 @@
           "subtree_size": 1,
           "category_self": "db",
           "categories_reached": {
-            "db": 3
+            "db": 3,
+            "log": 1
           },
           "external_calls": [
+            {
+              "name": "info",
+              "receiver": "logger",
+              "category": "log",
+              "tier": "receiver_pattern",
+              "evidence": "receiver name `logger` matches log pattern",
+              "line": 25,
+              "in_loop": true,
+              "in_await": false
+            },
             {
               "name": "add",
               "receiver": "session",
               "category": "db",
               "tier": "receiver_pattern",
               "evidence": "receiver name `session` matches db pattern",
-              "line": 24,
+              "line": 26,
               "in_loop": true,
               "in_await": false
             },
@@ -284,19 +407,19 @@
               "category": "db",
               "tier": "receiver_pattern",
               "evidence": "receiver name `session` matches db pattern",
-              "line": 25,
+              "line": 27,
               "in_loop": true,
               "in_await": false
             }
           ],
           "complexity": 2,
-          "loc": 4,
+          "loc": 5,
           "nesting_depth": 1,
           "parameter_count": 2,
           "is_async": false,
           "call_site_count": 1,
           "is_recursive": false,
-          "pagerank": 0.055985035618206835,
+          "pagerank": 0.052824658585246834,
           "percent_total": 20.0,
           "percent_parent": 20.0,
           "n_plus_one_risk": true,
@@ -305,22 +428,39 @@
             {
               "kind": "n_plus_one",
               "severity": "high",
+              "effort": "small",
               "confidence": 0.8,
-              "line": 24,
+              "line": 26,
               "message": "2 db call(s) inside a loop in `save_each`: session.add(), session.commit(). Each loop iteration issues a separate query — classic N+1.",
               "evidence": [
                 {
                   "call": "session.add",
-                  "line": 24,
+                  "line": 26,
                   "category": "db"
                 },
                 {
                   "call": "session.commit",
-                  "line": 25,
+                  "line": 27,
                   "category": "db"
                 }
               ],
               "remediation": "Batch the calls outside the loop: collect inputs first, then issue ONE query (e.g. SQLAlchemy `bulk_save_objects`, Django `bulk_create`, TypeORM `save([...])`)."
+            },
+            {
+              "kind": "noisy_log",
+              "severity": "medium",
+              "effort": "trivial",
+              "confidence": 0.85,
+              "line": 25,
+              "message": "1 log call(s) inside a loop in `save_each`. Each iteration writes a line; expect log-pipeline cost proportional to N.",
+              "evidence": [
+                {
+                  "call": "logger.info",
+                  "line": 25,
+                  "category": "log"
+                }
+              ],
+              "remediation": "Aggregate or sample: log once per batch with a count, or use a rate-limited logger / sampler."
             }
           ]
         },
@@ -329,7 +469,7 @@
           "name": "walk_tree",
           "kind": "Function",
           "file": "app/orders.py",
-          "line": 41,
+          "line": 43,
           "depth": 1,
           "parent_class": null,
           "children": [
@@ -338,7 +478,7 @@
               "name": "descend_children",
               "kind": "Function",
               "file": "app/orders.py",
-              "line": 48,
+              "line": 50,
               "depth": 2,
               "parent_class": null,
               "children": [
@@ -347,7 +487,7 @@
                   "name": "walk_tree",
                   "kind": "Function",
                   "file": "app/orders.py",
-                  "line": 41,
+                  "line": 43,
                   "depth": 3,
                   "parent_class": null,
                   "children": [],
@@ -357,14 +497,14 @@
                       "id": "tests/fixtures/insights-demo/app/orders.py::::descend_children",
                       "name": "descend_children",
                       "file": "app/orders.py",
-                      "line": 48,
+                      "line": 50,
                       "parent_class": null
                     },
                     {
                       "id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
                       "name": "process_batch",
                       "file": "app/orders.py",
-                      "line": 53,
+                      "line": 55,
                       "parent_class": null
                     }
                   ],
@@ -381,7 +521,7 @@
                   "is_async": false,
                   "call_site_count": 2,
                   "is_recursive": true,
-                  "pagerank": 0.3783592158958909,
+                  "pagerank": 0.36694536108165043,
                   "percent_total": 20.0,
                   "percent_parent": 50.0,
                   "n_plus_one_risk": false,
@@ -389,9 +529,10 @@
                   "findings": [
                     {
                       "kind": "recursive",
-                      "severity": "medium",
+                      "severity": "high",
+                      "effort": "medium",
                       "confidence": 1.0,
-                      "line": 41,
+                      "line": 43,
                       "message": "`walk_tree` participates in a recursion cycle (mutual or self). Verify there is a base case and a bounded recursion depth.",
                       "remediation": "Confirm termination invariants. If the recursion depth scales with input size, consider an explicit loop or tail-recursion equivalent."
                     }
@@ -404,7 +545,7 @@
                   "id": "tests/fixtures/insights-demo/app/orders.py::::walk_tree",
                   "name": "walk_tree",
                   "file": "app/orders.py",
-                  "line": 41,
+                  "line": 43,
                   "parent_class": null
                 }
               ],
@@ -421,7 +562,7 @@
               "is_async": false,
               "call_site_count": 1,
               "is_recursive": true,
-              "pagerank": 0.3694210664056458,
+              "pagerank": 0.3584882383982598,
               "percent_total": 40.0,
               "percent_parent": 66.66666666666666,
               "n_plus_one_risk": false,
@@ -430,8 +571,9 @@
                 {
                   "kind": "recursive",
                   "severity": "medium",
+                  "effort": "medium",
                   "confidence": 1.0,
-                  "line": 48,
+                  "line": 50,
                   "message": "`descend_children` participates in a recursion cycle (mutual or self). Verify there is a base case and a bounded recursion depth.",
                   "remediation": "Confirm termination invariants. If the recursion depth scales with input size, consider an explicit loop or tail-recursion equivalent."
                 }
@@ -444,14 +586,14 @@
               "id": "tests/fixtures/insights-demo/app/orders.py::::descend_children",
               "name": "descend_children",
               "file": "app/orders.py",
-              "line": 48,
+              "line": 50,
               "parent_class": null
             },
             {
               "id": "tests/fixtures/insights-demo/app/orders.py::::process_batch",
               "name": "process_batch",
               "file": "app/orders.py",
-              "line": 53,
+              "line": 55,
               "parent_class": null
             }
           ],
@@ -468,7 +610,7 @@
           "is_async": false,
           "call_site_count": 2,
           "is_recursive": true,
-          "pagerank": 0.3783592158958909,
+          "pagerank": 0.36694536108165043,
           "percent_total": 60.0,
           "percent_parent": 60.0,
           "n_plus_one_risk": false,
@@ -476,9 +618,10 @@
           "findings": [
             {
               "kind": "recursive",
-              "severity": "medium",
+              "severity": "high",
+              "effort": "medium",
               "confidence": 1.0,
-              "line": 41,
+              "line": 43,
               "message": "`walk_tree` participates in a recursion cycle (mutual or self). Verify there is a base case and a bounded recursion depth.",
               "remediation": "Confirm termination invariants. If the recursion depth scales with input size, consider an explicit loop or tail-recursion equivalent."
             }
@@ -493,7 +636,7 @@
       "category_self": "log",
       "categories_reached": {
         "db": 3,
-        "log": 2
+        "log": 3
       },
       "external_calls": [
         {
@@ -502,7 +645,7 @@
           "category": "log",
           "tier": "receiver_pattern",
           "evidence": "receiver name `logger` matches log pattern",
-          "line": 58,
+          "line": 60,
           "in_loop": true,
           "in_await": false
         }
@@ -514,7 +657,7 @@
       "is_async": false,
       "call_site_count": 0,
       "is_recursive": false,
-      "pagerank": 0.03924693641605131,
+      "pagerank": 0.03695695698914049,
       "percent_total": 100.0,
       "percent_parent": 100.0,
       "n_plus_one_risk": false,
@@ -523,13 +666,14 @@
         {
           "kind": "noisy_log",
           "severity": "medium",
+          "effort": "trivial",
           "confidence": 0.85,
-          "line": 58,
+          "line": 60,
           "message": "1 log call(s) inside a loop in `process_batch`. Each iteration writes a line; expect log-pipeline cost proportional to N.",
           "evidence": [
             {
               "call": "logger.debug",
-              "line": 58,
+              "line": 60,
               "category": "log"
             }
           ],

@@ -4,6 +4,8 @@ export type Category = 'db' | 'network' | 'io' | 'cache' | 'queue' | 'log' | 'co
 
 export type Severity = 'low' | 'medium' | 'high';
 
+export type Effort = 'trivial' | 'small' | 'medium' | 'large';
+
 export type FindingKind =
   | 'n_plus_one'
   | 'blocking_in_async'
@@ -12,7 +14,10 @@ export type FindingKind =
   | 'noisy_log'
   | 'outdated_package'
   | 'memory_explosion'
-  | 'hot_zone';
+  | 'hot_zone'
+  | 'expensive_compute'
+  | 'missing_caching'
+  | 'log_amplification';
 
 export interface Evidence {
   call: string;
@@ -23,6 +28,8 @@ export interface Evidence {
 export interface Finding {
   kind: FindingKind;
   severity: Severity;
+  /// Defaults to 'medium' if absent (older fixtures).
+  effort?: Effort;
   confidence: number;
   line: number;
   message: string;
@@ -35,6 +42,67 @@ export interface FindingTopRef {
   kind: FindingKind;
   severity: Severity;
   line: number;
+}
+
+export interface RootCallerSummary {
+  node_id: string;
+  name: string;
+  file: string;
+  line: number;
+  parent_class?: string | null;
+}
+
+export interface RootCalleeSummary {
+  node_id: string;
+  name: string;
+  file: string;
+  line: number;
+  parent_class?: string | null;
+  subtree_size: number;
+}
+
+export interface RootOverview {
+  node_id: string;
+  name: string;
+  file: string;
+  line: number;
+  parent_class?: string | null;
+  kind: SymbolKind;
+  subtree_size: number;
+  percent_of_all_roots: number;
+  categories_reached?: Record<string, number>;
+  findings_by_severity?: Record<string, number>;
+  findings_total: number;
+  callers?: RootCallerSummary[];
+  first_callees?: RootCalleeSummary[];
+}
+
+export interface ImmediateFix {
+  node_id: string;
+  name: string;
+  file: string;
+  line: number;
+  parent_class?: string | null;
+  kind: FindingKind;
+  severity: Severity;
+  effort: Effort;
+  message: string;
+}
+
+export interface RefactorCandidate {
+  node_id: string;
+  name: string;
+  file: string;
+  line: number;
+  parent_class?: string | null;
+  findings_count: number;
+  kinds: FindingKind[];
+  worst_severity: Severity;
+  max_effort: Effort;
+  complexity: number;
+  loc: number;
+  percent_total: number;
+  why: string;
 }
 
 export interface ExternalCall {
@@ -151,6 +219,13 @@ export interface Summary {
   // Phase E — insights rollups (optional; older fixtures omit them)
   findings_by_kind?: Record<string, number>;
   findings_top?: FindingTopRef[];
+  /// Per-entry-point rollup. Mirrors pprof's `top -cum` at root granularity.
+  roots_overview?: RootOverview[];
+  /// "Quick wins" — high severity + trivial/small effort findings.
+  immediate_fixes?: ImmediateFix[];
+  /// "Where do I need a full refactor?" — per-symbol aggregates with
+  /// multiple findings, large effort, or god-function bodies.
+  refactor_candidates?: RefactorCandidate[];
 }
 
 export interface Generator {
@@ -214,4 +289,14 @@ export const FINDING_KIND_LABEL: Record<FindingKind, string> = {
   outdated_package:  'OUTDATED PKG',
   memory_explosion:  'MEMORY EXPLOSION',
   hot_zone:          'HOT ZONE',
+  expensive_compute: 'EXPENSIVE COMPUTE',
+  missing_caching:   'MISSING CACHING',
+  log_amplification: 'LOG AMPLIFICATION',
+};
+
+export const EFFORT_LABEL: Record<Effort, string> = {
+  trivial: 'TRIVIAL',
+  small:   'SMALL',
+  medium:  'MEDIUM',
+  large:   'LARGE',
 };
