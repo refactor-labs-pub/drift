@@ -4,3 +4,8 @@ action/node_modules/
 # Tauri updater signing keys — generated locally by `tauri signer generate`.
 # Private key must never be committed. See drift-lab/UPDATER.md.
 .tauri-keys/
+
+# Local production export drop folder written by `make drift-lab-export`.
+# Contains built .app/.dmg/.AppImage/.deb + SHA256SUMS — release artifacts
+# belong on GitHub Releases, not in git.
+/dist/
