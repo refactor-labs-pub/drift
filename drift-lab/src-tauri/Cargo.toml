@@ -42,6 +42,14 @@ tauri-plugin-store = "2"
 # instantly while a fresh probe runs in the background.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 
+# Static-call-tree analyzer. Sibling crate consumed as a library so the
+# desktop app can invoke the same pipeline the `drift-static-profiler` CLI
+# uses (scan-prompt + analyzer) without shelling out to a separate binary.
+# Path-dep keeps the two trees lockstep — there is no published version to
+# pin against, and the GitHub Actions build context already checks out the
+# whole repo so the `..` path resolves cleanly in CI.
+drift-static-profiler = { path = "../../drift-static-profiler" }
+
 # Misc
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

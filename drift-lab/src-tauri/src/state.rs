@@ -9,6 +9,7 @@ use crate::backend::ResolvedBackend;
 use crate::events::BackendStatus;
 use crate::history::Conversation;
 use crate::model_config::ModelBackend;
+use crate::scan::runner::PickerRegistry;
 
 pub struct AppState {
     pub backend: Arc<Mutex<Option<ResolvedBackend>>>,
@@ -30,6 +31,12 @@ pub struct AppState {
     /// Cancellation handle for the in-flight chat stream. Set at the start of
     /// `chat()`, taken (and cancelled) by `cancel_chat`.
     pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
+
+    /// Per-scan handshake registry. Holds the channel a parked
+    /// `analyze_picked_with_progress` closure listens on while the user
+    /// chooses an entry root from the UI. Owned by the AppState so multiple
+    /// commands can poke at it without re-plumbing.
+    pub scan_pickers: Arc<PickerRegistry>,
 }
 
 impl AppState {
@@ -41,6 +48,7 @@ impl AppState {
             status: Arc::new(Mutex::new(BackendStatus::Unconfigured)),
             current_conv: Arc::new(Mutex::new(None)),
             cancel_token: Arc::new(Mutex::new(None)),
+            scan_pickers: Arc::new(PickerRegistry::new()),
         }
     }
 }

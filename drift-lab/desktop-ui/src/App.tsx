@@ -5,6 +5,7 @@ import Onboarding from "./components/Onboarding";
 import { AppConfig, getAppConfig } from "./lib/tauri";
 import HomePage from "./pages/Home";
 import ReportPage from "./pages/Report";
+import ScanReportPage from "./pages/ScanReport";
 import SettingsPage from "./pages/Settings";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
+      <Route path="/scan/:scanId" element={<ScanReportPage />} />
       <Route path="/report/:runId" element={<ReportPage />} />
       <Route path="/settings" element={<SettingsPage />} />
     </Routes>

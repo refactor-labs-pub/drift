@@ -9,6 +9,11 @@ on:
   pull_request:
     paths:
       - 'drift-lab/**'
+      # drift-lab links against drift-static-profiler as a path dependency
+      # (see drift-lab/src-tauri/Cargo.toml). A change in the profiler
+      # crate must trigger the desktop build so we catch breakage at PR
+      # time, not the next time someone touches drift-lab/.
+      - 'drift-static-profiler/**'
       - '.github/workflows/drift-lab-desktop-build.yml'
   workflow_dispatch:
 

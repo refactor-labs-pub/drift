@@ -96,12 +96,14 @@ jobs:
             prev="$last_tag"
           fi
 
-          # Commits that touched drift-lab/ OR a workflow file that affects the
-          # drift-lab pipeline count for a release. CI fixes (e.g. publish-step
-          # bug fixes) need to ship a release too, otherwise the "fix" is
-          # invisible until the next code change.
+          # Commits that touched drift-lab/ OR drift-static-profiler/ (the
+          # path-dependency the desktop app links against) OR a workflow file
+          # that affects the drift-lab pipeline count for a release. CI fixes
+          # (e.g. publish-step bug fixes) need to ship a release too,
+          # otherwise the "fix" is invisible until the next code change.
           relevant=$(git log "$range" --no-merges --pretty=format:'%H' -- \
             drift-lab/ \
+            drift-static-profiler/ \
             .github/workflows/ci.yml \
             .github/workflows/drift-lab-desktop-build.yml \
             || true)
@@ -385,7 +387,10 @@ jobs:
             echo "- **Other Linux** — \`chmod +x drift-lab_*.AppImage && ./drift-lab_*.AppImage\`"
             echo
             echo "### Changes since $prev_label"
-            git log "$range" --no-merges --pretty='- %s (%h)' -- drift-lab/ | head -200
+            # Include drift-static-profiler commits — the desktop links it as
+            # a path dep, so a profiler change really did ship in this build.
+            git log "$range" --no-merges --pretty='- %s (%h)' \
+              -- drift-lab/ drift-static-profiler/ | head -200
           } > "$notes_file"
 
           echo "file=$notes_file" >> "$GITHUB_OUTPUT"

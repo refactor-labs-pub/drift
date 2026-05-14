@@ -11,6 +11,8 @@ mod history;
 mod model_config;
 pub mod model_discovery;
 mod presets;
+pub mod scan;
+mod scan_commands;
 #[allow(dead_code)] // Trait + file-backed impl. Kept as the swap path to a future KeychainSecretStore.
 mod secret_store;
 mod state;
@@ -295,7 +297,25 @@ pub fn run() {
             commands::new_conversation,
             commands::delete_conversation,
             commands::get_current_conversation,
+            // Static scan — two-step pick flow + suggestion driver.
+            scan_commands::start_static_scan,
+            scan_commands::select_entry_and_scan,
+            scan_commands::list_static_scans,
+            scan_commands::load_static_scan,
+            scan_commands::list_scan_entries,
+            scan_commands::start_scan_suggestions,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // Hard-exit on any quit path. The static scan runs via
+            // `spawn_blocking` + rayon — neither honors cancellation,
+            // so a graceful Tauri/Tokio shutdown would block (sometimes
+            // for minutes) waiting for the analysis to finish. We
+            // deliberately bypass runtime drop and kill the process
+            // (and all its threads) immediately.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                std::process::exit(0);
+            }
+        });
 }

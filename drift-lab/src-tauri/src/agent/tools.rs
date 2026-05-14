@@ -69,6 +69,7 @@ fn classify(name: &str) -> Permission {
         "check_docker"
         | "list_directory"
         | "read_file_excerpt"
+        | "read_file_lines"
         | "discover_project"
         | "find_image"
         | "detect_runtime"
@@ -182,6 +183,11 @@ async fn dispatch_inner(name: &str, arguments: serde_json::Value) -> anyhow::Res
             let args: tools::read_file_excerpt::Args = serde_json::from_value(arguments)
                 .with_context(|| format!("invalid args for {n}"))?;
             serde_json::to_string(&tools::read_file_excerpt::run(args).await?)?
+        }
+        n if n == tools::read_file_lines::NAME => {
+            let args: tools::read_file_lines::Args = serde_json::from_value(arguments)
+                .with_context(|| format!("invalid args for {n}"))?;
+            serde_json::to_string(&tools::read_file_lines::run(args).await?)?
         }
         n if n == tools::discover_project::NAME => {
             let args: tools::discover_project::Args = serde_json::from_value(arguments)

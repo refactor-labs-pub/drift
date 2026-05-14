@@ -21,7 +21,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
                     let _ = w.set_focus();
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => std::process::exit(0),
             _ => {}
         })
         .build(app)?;

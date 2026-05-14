@@ -30,6 +30,7 @@ pub mod install_profiler;
 pub mod list_containers;
 pub mod list_directory;
 pub mod read_file_excerpt;
+pub mod read_file_lines;
 pub mod run_profiling;
 
 use serde::Serialize;
@@ -56,6 +57,10 @@ pub fn manifest() -> Vec<ToolManifest> {
         check_docker::manifest(),
         list_directory::manifest(),
         read_file_excerpt::manifest(),
+        // Anchor-centric companion to read_file_excerpt — the static-scan
+        // suggester depends on it, and the agent can use it whenever it
+        // already has a target line from a finding.
+        read_file_lines::manifest(),
         discover_project::manifest(),
         find_image::manifest(),
         // `ensure_image` runs after `find_image` and before `detect_runtime` —

@@ -557,6 +557,154 @@ export async function cancelChat(): Promise<void> {
   return invoke<void>("cancel_chat");
 }
 
+// ---------- Static scan (drift-static-profiler) ----------
+//
+// Two-step flow: `startStaticScan` runs root discovery, emits a stream of
+// `scan://progress` events, then fires `scan://entries-ready` with the
+// top-10 entry roots. The user picks one; the UI calls
+// `selectEntryAndScan(scanId, rootIndex)` and the same task wakes up to
+// build the focused report. On success a `scan://complete` event arrives
+// with the path of the saved JSON.
+
+export type ScanProgress =
+  | { kind: "walk_start"; scanId: string }
+  | { kind: "walk_progress"; scanId: string; filesSeen: number }
+  | { kind: "walk_end"; scanId: string; totalFiles: number; bytes: number }
+  | { kind: "parse_start"; scanId: string; totalSourceFiles: number }
+  | { kind: "parse_progress"; scanId: string; done: number; total: number; current: string | null }
+  | { kind: "phase"; scanId: string; name: string }
+  | { kind: "step_start"; scanId: string; label: string; total: number }
+  | { kind: "step_progress"; scanId: string; label: string; done: number; total: number; current: string | null };
+
+export interface ScanPickerCaller {
+  name: string;
+  file: string;
+  line: number;
+}
+
+export interface ScanPickerRoot {
+  index: number;
+  name: string;
+  file: string;
+  line: number;
+  reach: number;
+  callers: ScanPickerCaller[];
+}
+
+export interface ScanEntriesReady {
+  scanId: string;
+  roots: ScanPickerRoot[];
+}
+
+export interface ScanComplete {
+  scanId: string;
+  savedPath: string;
+  pickedRoot: string | null;
+}
+
+export interface ScanErrorPayload {
+  scanId: string;
+  message: string;
+}
+
+export interface ScanSuggestionPayload {
+  scanId: string;
+  index: number;
+  source: "immediate_fix" | "refactor_candidate" | "finding_top";
+  kind: string;
+  severity: string;
+  file: string;
+  line: number;
+  name: string;
+  suggestion: string;
+}
+
+export interface ScanSuggestionDone {
+  scanId: string;
+  total: number;
+  failed: number;
+}
+
+/** Saved-scan envelope returned by `loadStaticScan`. The `report` mirrors
+ *  the JSON the static-profiler CLI writes — same shape, so the same
+ *  summary components render it identically. */
+export interface StoredScan {
+  scanId: string;
+  savedAt: string;
+  /// Typed loosely here; the summary components in
+  /// `components/scan-summary` declare the concrete shape they need. */
+  report: unknown;
+}
+
+export interface ScanMeta {
+  scanId: string;
+  savedAt: string;
+  sourceRoot: string | null;
+  profiledLanguage: string | null;
+  files: number;
+  symbols: number;
+  findingsTotal: number;
+}
+
+export async function startStaticScan(projectPath: string): Promise<string> {
+  return invoke<string>("start_static_scan", { projectPath });
+}
+
+export async function selectEntryAndScan(
+  scanId: string,
+  rootIndex: number | null,
+): Promise<void> {
+  return invoke<void>("select_entry_and_scan", { scanId, rootIndex });
+}
+
+export async function listStaticScans(): Promise<ScanMeta[]> {
+  return invoke<ScanMeta[]>("list_static_scans");
+}
+
+export async function loadStaticScan(scanId: string): Promise<StoredScan> {
+  return invoke<StoredScan>("load_static_scan", { scanId });
+}
+
+export async function startScanSuggestions(scanId: string): Promise<void> {
+  return invoke<void>("start_scan_suggestions", { scanId });
+}
+
+export async function onScanProgress(
+  cb: (p: ScanProgress) => void,
+): Promise<() => void> {
+  return listen<ScanProgress>("scan://progress", cb);
+}
+
+export async function onScanEntriesReady(
+  cb: (p: ScanEntriesReady) => void,
+): Promise<() => void> {
+  return listen<ScanEntriesReady>("scan://entries-ready", cb);
+}
+
+export async function onScanComplete(
+  cb: (p: ScanComplete) => void,
+): Promise<() => void> {
+  return listen<ScanComplete>("scan://complete", cb);
+}
+
+export async function onScanError(
+  cb: (p: ScanErrorPayload) => void,
+): Promise<() => void> {
+  return listen<ScanErrorPayload>("scan://error", cb);
+}
+
+export async function onScanSuggestion(
+  cb: (p: ScanSuggestionPayload) => void,
+): Promise<() => void> {
+  return listen<ScanSuggestionPayload>("scan://suggestion", cb);
+}
+
+export async function onScanSuggestionDone(
+  cb: (p: ScanSuggestionDone) => void,
+): Promise<() => void> {
+  return listen<ScanSuggestionDone>("scan://suggestion-done", cb);
+}
+
 export async function onChatCancelled(cb: () => void): Promise<() => void> {
   return listen<unknown>("chat:cancelled", () => cb());
 }
