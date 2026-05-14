@@ -6,7 +6,7 @@ import Orbs from "../components/Orbs";
 import RunButton from "../components/RunButton";
 import SearchBox from "../components/SearchBox";
 import UpdateBanner from "../components/UpdateBanner";
-import { CheckIcon, SettingsIcon, ArrowRightIcon } from "../components/icons";
+import { SettingsIcon } from "../components/icons";
 import StaticScanRunningView from "../components/scan-summary/StaticScanRunningView";
 import {
   selectProjectPath,
@@ -17,27 +17,19 @@ import { useRunStore } from "../store/runStore";
 /**
  * The Home page IS the static-scan pipeline.
  *
- *   idle  → folder picker + Run button
+ *   idle    → folder picker + Run button
  *   running → MagicOrb + streamed progress + inline entry picker
- *   done  → brief stats + auto-navigate to /scan/:scanId
- *   error → message + reset
+ *   error   → message + reset
  *
- * Static scan kicks off the moment the user clicks Run — no goal prompt
- * (the analyzer is deterministic), no Docker setup, no per-tool approval.
- * The LLM is only consulted in the *report* phase (Generate suggestions),
- * which happens on the next route.
+ * Once the scan completes the page navigates straight to `/scan/:scanId` —
+ * the user never sees an in-between "view report" screen. The LLM is only
+ * consulted on the report page, and only when the user clicks "Study this"
+ * on an individual finding (no automatic generation).
  */
 
 type Phase =
   | { kind: "idle" }
-  | { kind: "running"; scanId: string; startedAt: number }
-  | {
-      kind: "done";
-      scanId: string;
-      savedPath: string;
-      pickedRoot: string | null;
-      durationMs: number;
-    }
+  | { kind: "running"; scanId: string }
   | { kind: "error"; message: string };
 
 export default function HomePage() {
@@ -55,7 +47,7 @@ export default function HomePage() {
     if (phase.kind === "running") return;
     try {
       const id = await startStaticScan(projectPath);
-      setPhase({ kind: "running", scanId: id, startedAt: Date.now() });
+      setPhase({ kind: "running", scanId: id });
     } catch (e) {
       setPhase({
         kind: "error",
@@ -64,23 +56,13 @@ export default function HomePage() {
     }
   }, [projectPath, phase.kind]);
 
-  // Called by StaticScanRunningView when `scan://complete` fires. The
-  // saved scan is already on disk — we transition to a brief done card
-  // and let the user step into the full report.
+  // Scan complete → jump directly to the scan-report page. No intermediate
+  // "view report" affordance — the user asked for one less click.
   const handleComplete = useCallback(
-    (scanId: string, savedPath: string, pickedRoot: string | null) => {
-      setPhase((cur) => {
-        if (cur.kind !== "running") return cur;
-        return {
-          kind: "done",
-          scanId,
-          savedPath,
-          pickedRoot,
-          durationMs: Date.now() - cur.startedAt,
-        };
-      });
+    (scanId: string) => {
+      navigate(`/scan/${scanId}`);
     },
-    [],
+    [navigate],
   );
 
   const handleError = useCallback((message: string) => {
@@ -139,63 +121,9 @@ export default function HomePage() {
         />
       )}
 
-      {phase.kind === "done" && (
-        <DonePanel
-          scanId={phase.scanId}
-          pickedRoot={phase.pickedRoot}
-          durationMs={phase.durationMs}
-          savedPath={phase.savedPath}
-          onView={() => navigate(`/scan/${phase.scanId}`)}
-          onAnother={handleReset}
-        />
-      )}
-
       {phase.kind === "error" && (
         <ErrorPanel message={phase.message} onReset={handleReset} />
       )}
-    </div>
-  );
-}
-
-function DonePanel({
-  scanId,
-  pickedRoot,
-  durationMs,
-  savedPath,
-  onView,
-  onAnother,
-}: {
-  scanId: string;
-  pickedRoot: string | null;
-  durationMs: number;
-  savedPath: string;
-  onView: () => void;
-  onAnother: () => void;
-}) {
-  return (
-    <div className="done-state">
-      <div className="done-icon">
-        <CheckIcon />
-      </div>
-      <div>
-        <div className="done-title">Scan complete ✨</div>
-        <div className="done-sub">
-          {pickedRoot ? <>Focused on <code>{pickedRoot}</code> · </> : null}
-          {(durationMs / 1000).toFixed(1)}s · saved to <code>{shortPath(savedPath)}</code>
-        </div>
-        <div className="done-sub" style={{ fontSize: 10.5, marginTop: 6 }}>
-          scan id <code>{scanId.slice(0, 8)}…</code>
-        </div>
-      </div>
-      <div className="done-actions">
-        <button type="button" className="view-btn" onClick={onView}>
-          View report
-          <ArrowRightIcon />
-        </button>
-        <button type="button" className="ghost-btn" onClick={onAnother}>
-          Run another
-        </button>
-      </div>
     </div>
   );
 }
@@ -220,15 +148,4 @@ function ErrorPanel({
       </div>
     </div>
   );
-}
-
-/** Shorten an absolute path to `~/.drift/scans/<id>.json` form for the
- *  done card. We expect the path to live under the user's home, so a
- *  leading-home replacement is enough. */
-function shortPath(p: string): string {
-  // Best-effort — the Tauri host doesn't expose $HOME from here, but
-  // every saved scan lives under .drift/scans/ so chop everything before.
-  const idx = p.lastIndexOf(".drift/");
-  if (idx >= 0) return "~/" + p.slice(idx);
-  return p;
 }

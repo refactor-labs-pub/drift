@@ -29,7 +29,7 @@ import ScanProgressList, { reduceProgress, type PhaseRow } from "./ScanProgress"
  */
 interface Props {
   scanId: string;
-  onComplete: (scanId: string, savedPath: string, pickedRoot: string | null) => void;
+  onComplete: (scanId: string) => void;
   onError: (message: string) => void;
 }
 
@@ -77,7 +77,7 @@ export default function StaticScanRunningView({
       cleanup.push(
         await onScanComplete((p) => {
           if (!isMine(p.scanId)) return;
-          onComplete(p.scanId, p.savedPath, p.pickedRoot);
+          onComplete(p.scanId);
         }),
       );
       cleanup.push(

@@ -742,17 +742,40 @@ export async function loadStaticScan(scanId: string): Promise<StoredScan> {
   return invoke<StoredScan>("load_static_scan", { scanId });
 }
 
-export async function startScanSuggestions(scanId: string): Promise<void> {
-  return invoke<void>("start_scan_suggestions", { scanId });
+/** One row in the canonical (dedupe + ranked + truncated) finding list the
+ *  suggester would iterate over. The array position is the stable index —
+ *  pass it straight into {@link startScanFindingSuggestion} to ask the LLM
+ *  to study that exact row. */
+export interface ListedFinding {
+  source: "immediate_fix" | "refactor_candidate" | "finding_top";
+  kind: string;
+  severity: string;
+  name: string;
+  file: string;
+  line: number;
+  message: string;
 }
 
-/** Stop the in-flight LLM suggestion driver for `scanId`. Idempotent —
- *  returns `false` when no session was actually live to cancel. The driver
- *  will still emit a final `scan://suggestion-done` so the UI's run-state
- *  flag flips through the normal event path; the caller doesn't need to
- *  re-derive it from the boolean. */
-export async function stopScanSuggestions(scanId: string): Promise<boolean> {
-  return invoke<boolean>("stop_scan_suggestions", { scanId });
+export async function listScanFindings(scanId: string): Promise<ListedFinding[]> {
+  return invoke<ListedFinding[]>("list_scan_findings", { scanId });
+}
+
+/** Kick off a single-finding LLM stream. The same `scan://suggestion-{start,
+ *  delta,done}` events fire — keyed on `index` so existing handlers reconcile
+ *  the right row. Idempotent for `(scanId, index)`: a second call while the
+ *  first is still streaming is a silent no-op. */
+export async function startScanFindingSuggestion(
+  scanId: string,
+  index: number,
+): Promise<void> {
+  return invoke<void>("start_scan_finding_suggestion", { scanId, index });
+}
+
+export async function stopScanFindingSuggestion(
+  scanId: string,
+  index: number,
+): Promise<boolean> {
+  return invoke<boolean>("stop_scan_finding_suggestion", { scanId, index });
 }
 
 export async function onScanProgress(

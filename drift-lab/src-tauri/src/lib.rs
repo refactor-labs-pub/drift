@@ -303,14 +303,15 @@ pub fn run() {
             commands::new_conversation,
             commands::delete_conversation,
             commands::get_current_conversation,
-            // Static scan — two-step pick flow + suggestion driver.
+            // Static scan — two-step pick flow + per-finding "Study this" driver.
             scan_commands::start_static_scan,
             scan_commands::select_entry_and_scan,
             scan_commands::list_static_scans,
             scan_commands::load_static_scan,
             scan_commands::list_scan_entries,
-            scan_commands::start_scan_suggestions,
-            scan_commands::stop_scan_suggestions,
+            scan_commands::list_scan_findings,
+            scan_commands::start_scan_finding_suggestion,
+            scan_commands::stop_scan_finding_suggestion,
             // LLM-driven single-location patch (streaming → card → apply).
             patch::commands::start_patch,
             patch::commands::apply_patch,

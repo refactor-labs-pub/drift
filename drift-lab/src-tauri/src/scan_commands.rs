@@ -101,18 +101,33 @@ pub async fn list_scan_entries(scan_id: String) -> Result<Vec<ScanPickerRoot>, S
         .collect())
 }
 
-/// Kick off the per-finding suggestion phase against a saved scan. The
-/// command returns immediately; suggestions stream over `scan://suggestion`
-/// and the run terminates with `scan://suggestion-done`.
+/// Return the canonical ranked + deduped finding list for a saved scan.
+/// The frontend renders one "Study this" row per item; the `index` is the
+/// key the UI passes back to [`start_scan_finding_suggestion`].
 ///
-/// **Idempotent**: if a driver is already running for `scan_id` (e.g. the
-/// page remounts during a stream, or auto-start fires twice in quick
-/// succession) we return `Ok(())` without spawning a duplicate task. The
-/// UI's auto-start path relies on this — it can call the command on every
-/// mount without risk of double-streaming the same scan.
+/// Why we expose this from Rust instead of having the UI compute it: the
+/// suggester applies a specific dedupe (file, line, kind) and a hard cap on
+/// the count. Keeping that policy in one place means the index the UI hands
+/// us always matches the row the suggester will operate on.
 #[tauri::command]
-pub async fn start_scan_suggestions<R: Runtime>(
+pub async fn list_scan_findings(scan_id: String) -> Result<Vec<suggester::FindingItem>, String> {
+    let env = storage::load_envelope(&scan_id).map_err(|e| format!("{e:#}"))?;
+    Ok(suggester::collect_findings(&env.report))
+}
+
+/// Kick off the LLM suggestion run for ONE finding in a saved scan. The
+/// command returns immediately; the suggestion streams over
+/// `scan://suggestion-{start,delta}` and terminates with
+/// `scan://suggestion-done`.
+///
+/// **Idempotent per (scan_id, index)**: if a driver is already running for
+/// this specific finding, we return `Ok(())` without spawning a duplicate
+/// task. The user can still click Study This on a *different* finding while
+/// another stream is in flight — each gets its own cancel token.
+#[tauri::command]
+pub async fn start_scan_finding_suggestion<R: Runtime>(
     scan_id: String,
+    index: usize,
     state: State<'_, AppState>,
     app: AppHandle<R>,
 ) -> Result<(), String> {
@@ -123,15 +138,16 @@ pub async fn start_scan_suggestions<R: Runtime>(
         .clone()
         .ok_or_else(|| "backend not configured".to_string())?;
     let provider = build_provider(config).map_err(|e| format!("{e:#}"))?;
-    // Idempotency guard: only one driver per scan_id at a time.
-    let Some(cancel) = state.scan_suggestions.register_if_absent(&scan_id) else {
-        // A session for this scan_id is already running — silently no-op so
-        // remount-driven auto-starts don't pile up tasks.
+    let Some(cancel) = state
+        .scan_suggestions
+        .register_if_absent(&scan_id, index)
+    else {
         return Ok(());
     };
-    suggester::start_suggestions(
+    suggester::start_finding_suggestion(
         app,
         scan_id,
+        index,
         provider,
         cancel,
         Arc::clone(&state.scan_suggestions),
@@ -139,25 +155,22 @@ pub async fn start_scan_suggestions<R: Runtime>(
     Ok(())
 }
 
-/// Stop the in-flight suggestion driver for `scan_id`. Idempotent — calling
-/// for a scan with no live session is a silent no-op (returns `false`).
+/// Stop the in-flight suggestion driver for `(scan_id, index)`. Idempotent
+/// — calling for a finding with no live session is a silent no-op
+/// (returns `false`).
 ///
 /// Mechanism: trigger the `CancellationToken` in the registry. The driver's
 /// `tokio::select!` on `cancel.cancelled()` fires immediately, dropping the
 /// provider stream future, which drops the underlying HTTP connection. The
-/// driver finalizes the current row (emits `scan://suggestion` so the UI
-/// clears `isStreaming`) and exits the outer loop on the next iteration's
-/// `is_cancelled` check.
-///
-/// The driver still emits a final `scan://suggestion-done` after cancel —
-/// the UI uses that to flip its "running" flag and surface the Regenerate
-/// affordance.
+/// driver finalizes the row (emits `scan://suggestion` so the UI clears
+/// `isStreaming`) and emits `scan://suggestion-done`.
 #[tauri::command]
-pub async fn stop_scan_suggestions(
+pub async fn stop_scan_finding_suggestion(
     scan_id: String,
+    index: usize,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    Ok(state.scan_suggestions.cancel(&scan_id))
+    Ok(state.scan_suggestions.cancel(&scan_id, index))
 }
 
 fn build_provider(

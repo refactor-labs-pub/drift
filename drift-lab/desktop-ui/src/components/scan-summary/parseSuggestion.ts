@@ -2,8 +2,14 @@
  * Pure, partial-tolerant parser for the suggester's output format.
  *
  * The LLM emits, strictly:
- *   `Why: <one sentence rationale>`
- *   <blank line>
+ *   problem_description_reasoning:
+ *   <2–4 sentences about WHAT the problem is and WHY it matters>
+ *
+ *   solution_description_reasoning:
+ *   <2–4 sentences about WHY the proposed change resolves it>
+ *
+ *   Why: <one-sentence terse summary>
+ *
  *   ```diff
  *   @@ -34,7 +34,9 @@
  *    fn get_user(id: u64) -> User {
@@ -16,17 +22,19 @@
  * *every accumulated body*, so any prefix of the contract must parse
  * cleanly:
  *
- *   1. `Why: ...` (no fence yet)                → rationale only, no diff
- *   2. `Why: ...\n\n` (about to open the fence) → rationale only, no diff
- *   3. `Why: ...\n\n\`\`\`diff\n@@ ...`         → rationale + open diff
- *   4. `Why: ...\n\n\`\`\`diff\n...\n\`\`\``   → rationale + closed diff
+ *   1. `problem_description_reasoning:` (header only)           → empty problem reasoning
+ *   2. `problem_description_reasoning:\n<text>` (no solution yet) → problem reasoning streaming
+ *   3. ...up through `Why: ...` + open `\`\`\`diff` fence
+ *   4. ...up through closed ``` fence (full body)
  *
  * The renderer uses {@link ParsedSuggestion.inDiff} and
  * {@link ParsedSuggestion.diffComplete} to decide where to put the
  * streaming caret (in the prose vs at the bottom of the diff).
  *
  * Robustness:
- *   - If the model omits the diff entirely, the whole body becomes
+ *   - Missing reasoning sections collapse to empty strings — the renderer
+ *     just doesn't render that panel.
+ *   - If the model omits the diff entirely, the whole tail becomes
  *     `rationale` and the UI falls back to the prose render.
  *   - If the model picks a different fence language (e.g. ```rust), we
  *     deliberately *don't* match it — the prose fallback renders it raw
@@ -45,8 +53,17 @@ export interface DiffLine {
 }
 
 export interface ParsedSuggestion {
-  /** Everything before the ```diff fence — the `Why:` line and any other
-   *  prose the model wrote ahead of the diff. Trimmed. */
+  /** Body of the `problem_description_reasoning:` section — what the
+   *  problem is and why it matters. Empty when the model hasn't emitted
+   *  that header yet, or when the section is missing. */
+  problemReasoning: string;
+  /** Body of the `solution_description_reasoning:` section — why the
+   *  proposed change resolves the problem. */
+  solutionReasoning: string;
+  /** Everything between the (optional) `Why:` line and the ```diff fence.
+   *  In the strict format this is the `Why: <one sentence>` summary; in
+   *  degraded outputs it absorbs whatever prose the model wrote ahead of
+   *  the diff. Trimmed. */
   rationale: string;
   /** Parsed diff lines, in order. Empty when no diff fence has streamed
    *  in yet. */
@@ -64,31 +81,95 @@ export interface ParsedSuggestion {
 const DIFF_FENCE_OPEN = /```\s*diff\s*\r?\n/;
 const FENCE_CLOSE_AT_LINE_START = /\r?\n```/;
 
-export function parseSuggestion(body: string): ParsedSuggestion {
-  const openMatch = body.match(DIFF_FENCE_OPEN);
-  if (!openMatch || openMatch.index === undefined) {
-    return {
-      rationale: body.trim(),
-      diffLines: [],
-      inDiff: false,
-      diffComplete: false,
-    };
-  }
-  const rationale = body.slice(0, openMatch.index).trim();
-  const afterFence = body.slice(openMatch.index + openMatch[0].length);
+// Section headers are case-insensitive at start-of-line. We allow optional
+// trailing whitespace after the colon so a model that emits
+// `problem_description_reasoning : ` still parses.
+const PROBLEM_HEADER = /(^|\n)\s*problem_description_reasoning\s*:\s*/i;
+const SOLUTION_HEADER = /(^|\n)\s*solution_description_reasoning\s*:\s*/i;
 
-  const closeMatch = afterFence.match(FENCE_CLOSE_AT_LINE_START);
-  const diffContent =
-    closeMatch && closeMatch.index !== undefined
-      ? afterFence.slice(0, closeMatch.index)
-      : afterFence;
+export function parseSuggestion(body: string): ParsedSuggestion {
+  // Step 1: split off the diff fence so the prose chunk above it is
+  // self-contained. Everything between the last diff fence and the start
+  // of the body is what we slice into named sections below.
+  const openMatch = body.match(DIFF_FENCE_OPEN);
+  let prose: string;
+  let diffLines: DiffLine[] = [];
+  let inDiff = false;
+  let diffComplete = false;
+
+  if (openMatch && openMatch.index !== undefined) {
+    prose = body.slice(0, openMatch.index);
+    const afterFence = body.slice(openMatch.index + openMatch[0].length);
+    const closeMatch = afterFence.match(FENCE_CLOSE_AT_LINE_START);
+    const diffContent =
+      closeMatch && closeMatch.index !== undefined
+        ? afterFence.slice(0, closeMatch.index)
+        : afterFence;
+    diffLines = classifyDiff(diffContent);
+    inDiff = true;
+    diffComplete = closeMatch !== null;
+  } else {
+    prose = body;
+  }
+
+  // Step 2: locate the two reasoning headers in the prose. Anything before
+  // the first header is dropped (the model shouldn't emit a preamble, but
+  // if it does we don't want to muddle the `Why:` summary with it).
+  const problemMatch = prose.match(PROBLEM_HEADER);
+  const solutionMatch = prose.match(SOLUTION_HEADER);
+
+  let problemReasoning = "";
+  let solutionReasoning = "";
+  let tail = prose;
+
+  if (problemMatch && problemMatch.index !== undefined) {
+    const start = problemMatch.index + problemMatch[0].length;
+    const end = solutionMatch && solutionMatch.index !== undefined
+      ? solutionMatch.index
+      : prose.length;
+    problemReasoning = prose.slice(start, end).trim();
+    tail = prose.slice(end);
+  }
+  if (solutionMatch && solutionMatch.index !== undefined) {
+    const start = solutionMatch.index + solutionMatch[0].length;
+    // The `Why:` line, if present, terminates the solution-reasoning
+    // section. Otherwise it runs to the end of the prose block.
+    const whyIdx = findWhyIndex(prose, start);
+    const end = whyIdx >= 0 ? whyIdx : prose.length;
+    solutionReasoning = prose.slice(start, end).trim();
+    tail = prose.slice(end);
+  }
+
+  // Step 3: whatever is left over is the `Why:` / rationale chunk.
+  const rationale = stripWhyPrefix(tail).trim();
 
   return {
+    problemReasoning,
+    solutionReasoning,
     rationale,
-    diffLines: classifyDiff(diffContent),
-    inDiff: true,
-    diffComplete: closeMatch !== null,
+    diffLines,
+    inDiff,
+    diffComplete,
   };
+}
+
+/** Locate `Why: ` as a line-start anchor at or after `from`. Returns -1 if
+ *  no such anchor exists — keeps `prose.indexOf` semantics. */
+function findWhyIndex(s: string, from: number): number {
+  const re = /(^|\n)\s*Why\s*:/i;
+  const slice = s.slice(from);
+  const m = slice.match(re);
+  if (!m || m.index === undefined) return -1;
+  // m.index is into `slice`; m[1] is the leading newline (if any). We want
+  // the position of the `Why` token, not the newline before it.
+  const newlineLen = m[1] ? m[1].length : 0;
+  return from + m.index + newlineLen;
+}
+
+/** Strip a leading `Why:` prefix so the rendered rationale doesn't include
+ *  the literal token (the UI labels it visually instead). */
+function stripWhyPrefix(s: string): string {
+  return s.replace(/^\s*Why\s*:\s*/i, "");
 }
 
 function classifyDiff(content: string): DiffLine[] {

@@ -14,6 +14,12 @@
 //! LLM is only to give the suggestion over the code … only on the summary
 //! of the static analysis."
 //!
+//! **Per-finding invocation**: the UI exposes a "Study this" button per
+//! finding row. Each click runs *one* finding end-to-end — there is no bulk
+//! / "do them all" mode. The registry key is `(scan_id, index)` so the
+//! user can study several findings concurrently (one stream per finding)
+//! without one Stop click cancelling another.
+//!
 //! Streaming: each finding fires three event waves so the UI can render
 //! suggestions live, OpenAI-chat-completions-style:
 //!   1. `scan://suggestion-start` — row metadata, sent before the LLM stream
@@ -43,26 +49,16 @@ use crate::scan::types::{
 };
 use crate::tools::read_file_lines;
 
-/// Per-scan cancellation registry. Holds the `CancellationToken` for the
-/// in-flight suggestion driver of each `scan_id`. The Stop button on the UI
-/// translates into [`Self::cancel`]; the driver task removes its own entry on
-/// completion via [`Self::clear`].
+/// Per-(scan, index) cancellation registry. Holds the `CancellationToken`
+/// for the in-flight per-finding suggestion driver. The Stop button on the
+/// UI translates into [`Self::cancel`]; the driver task removes its own
+/// entry on completion via [`Self::clear`].
 ///
-/// Mirrors the existing [`crate::scan::runner::PickerRegistry`] pattern so a
-/// reader who's seen one can guess the other at a glance: a `Mutex<HashMap>`
-/// owned by `AppState`, lock scope strictly inside one method per operation,
-/// no async APIs (so we never deadlock by awaiting under the lock).
-///
-/// Semantics chosen for the "user clicked Stop, then auto-start re-fires
-/// because the page remounted" race:
-///   - `register_if_absent` returns `None` when a session is already running
-///     for this `scan_id`. The caller treats `None` as a no-op (no new task
-///     spawned), so we never double-stream the same scan.
-///   - `cancel` is idempotent — calling it for a `scan_id` with no live
-///     session is a silent no-op, not an error.
+/// Each entry is keyed by `(scan_id, finding_index)` so the user can have
+/// multiple "Study this" streams active at once without cross-cancellation.
 #[derive(Default)]
 pub struct SuggestionRegistry {
-    inner: Mutex<HashMap<String, CancellationToken>>,
+    inner: Mutex<HashMap<(String, usize), CancellationToken>>,
 }
 
 impl SuggestionRegistry {
@@ -70,24 +66,30 @@ impl SuggestionRegistry {
         Self::default()
     }
 
-    /// Register a new cancel token for `scan_id`. Returns `None` if a token
-    /// already exists (another driver is mid-flight) — caller should NOT
-    /// spawn another task in that case.
-    pub fn register_if_absent(&self, scan_id: &str) -> Option<CancellationToken> {
+    /// Register a new cancel token for `(scan_id, index)`. Returns `None`
+    /// if a token already exists (another driver is mid-flight for the same
+    /// finding) — caller should NOT spawn another task in that case.
+    pub fn register_if_absent(
+        &self,
+        scan_id: &str,
+        index: usize,
+    ) -> Option<CancellationToken> {
         let mut g = self.inner.lock().ok()?;
-        if g.contains_key(scan_id) {
+        let key = (scan_id.to_string(), index);
+        if g.contains_key(&key) {
             return None;
         }
         let token = CancellationToken::new();
-        g.insert(scan_id.to_string(), token.clone());
+        g.insert(key, token.clone());
         Some(token)
     }
 
-    /// Trigger cancellation for `scan_id`. Returns true if a session was
-    /// actually live and got signalled, false if no session existed.
-    pub fn cancel(&self, scan_id: &str) -> bool {
+    /// Trigger cancellation for `(scan_id, index)`. Returns true if a
+    /// session was actually live and got signalled, false if no session
+    /// existed.
+    pub fn cancel(&self, scan_id: &str, index: usize) -> bool {
         let Ok(mut g) = self.inner.lock() else { return false };
-        match g.remove(scan_id) {
+        match g.remove(&(scan_id.to_string(), index)) {
             Some(token) => {
                 token.cancel();
                 true
@@ -97,24 +99,32 @@ impl SuggestionRegistry {
     }
 
     /// Remove the registry entry. Called by the driver task on completion
-    /// (whether success, error, or cancel) so a subsequent start can register
-    /// a fresh token.
-    fn clear(&self, scan_id: &str) {
+    /// (whether success, error, or cancel) so a subsequent start can
+    /// register a fresh token.
+    fn clear(&self, scan_id: &str, index: usize) {
         if let Ok(mut g) = self.inner.lock() {
-            g.remove(scan_id);
+            g.remove(&(scan_id.to_string(), index));
         }
     }
 }
 
 /// Prompt contract — locks the output to a shape the UI can render as a
-/// GitHub-style code-review diff (red removed / green added). The renderer
-/// is partial-tolerant: any prefix of the contract still parses to a valid
-/// (possibly incomplete) view, so streaming token-by-token "just works".
+/// reasoning-first code review: two prose sections explaining the problem
+/// and the chosen solution, followed by a GitHub-style unified diff. The
+/// renderer is partial-tolerant: any prefix of the contract still parses
+/// to a valid (possibly incomplete) view, so streaming token-by-token
+/// "just works".
 ///
 /// Format (strict):
-///   1. One line: `Why: <one sentence rationale>`.
-///   2. A blank line.
-///   3. A fenced unified-diff block:
+///   1. `problem_description_reasoning:` header on its own line.
+///   2. One or more paragraphs explaining *why this is a problem* — what
+///      the analyzer flagged, why the pattern is risky/slow/buggy.
+///   3. A blank line.
+///   4. `solution_description_reasoning:` header on its own line.
+///   5. One or more paragraphs explaining *why the proposed change works*
+///      — what it does, why it's the right fix vs. alternatives.
+///   6. A blank line.
+///   7. A fenced unified-diff block:
 ///        ```diff
 ///        @@ -<old_start>,<old_len> +<new_start>,<new_len> @@
 ///         <context line>
@@ -128,12 +138,20 @@ impl SuggestionRegistry {
 ///   - Use line numbers from the window header the user prompt provides.
 const SYSTEM_PROMPT: &str =
     "You are a senior code reviewer reading the output of a static call-graph analyzer. \
-     For each finding you receive, propose ONE specific code change that fixes the smell.\n\
+     For each finding you receive, explain your reasoning and then propose ONE specific \
+     code change that fixes the smell.\n\
      \n\
      Output format — strict, no preamble, no closing remarks:\n\
-     1. A single line starting with `Why: ` and ONE sentence explaining the change.\n\
-     2. A blank line.\n\
-     3. A fenced unified-diff block. Begin with ```diff and end with ``` on their own \
+     1. The literal header line `problem_description_reasoning:` on its own line.\n\
+     2. One or more paragraphs explaining WHY this is a problem — what the analyzer \
+        flagged, why the current pattern is risky, slow, or buggy in this context.\n\
+     3. A blank line.\n\
+     4. The literal header line `solution_description_reasoning:` on its own line.\n\
+     5. One or more paragraphs explaining WHY your proposed change fixes the problem \
+        — what the change does, why this approach is right vs. alternatives, and any \
+        trade-offs to be aware of.\n\
+     6. A blank line.\n\
+     7. A fenced unified-diff block. Begin with ```diff and end with ``` on their own \
         lines. Inside the block, use exactly the unified-diff conventions:\n\
         - `@@ -<old_start>,<old_len> +<new_start>,<new_len> @@` for the hunk header. \
           Derive line numbers from the source window in the user message.\n\
@@ -149,49 +167,47 @@ const SYSTEM_PROMPT: &str =
      \n\
      Do not invent issues outside the finding. Do not propose multiple options.";
 
-/// Maximum number of findings we send to the LLM. We aggregate up to this
-/// many across (immediate_fixes, refactor_candidates, findings_top) so a
-/// scan with hundreds of findings still finishes in bounded time.
+/// Maximum number of findings we expose to the UI. We aggregate up to this
+/// many across (immediate_fixes, refactor_candidates, findings_top) so the
+/// finding list stays a sensible, scrollable length even on large scans.
 const MAX_FINDINGS: usize = 24;
 
 /// Window around the finding line that we hand to the LLM. The default
 /// matches the spec: anchor ± 30 lines.
 const CONTEXT_LINES: u32 = 30;
 
-/// Drive the entire suggestion pass for one saved scan. Spawns a Tokio task
-/// so the command returns immediately; results stream via Tauri events.
+/// Drive a single-finding suggestion pass. Spawns a Tokio task so the
+/// command returns immediately; results stream via Tauri events.
 ///
-/// `cancel` is the per-scan token from [`SuggestionRegistry`]. The driver
-/// checks it at the top of every finding iteration AND races each provider
-/// stream chunk against it via `tokio::select!`, so a Stop click drops the
-/// HTTP connection within one frame instead of waiting for the next token.
-///
+/// `cancel` is the per-(scan_id, index) token from [`SuggestionRegistry`].
 /// `registry` is held so the task can free its slot on completion regardless
 /// of how it finished (success / error / cancel). Without this cleanup a
-/// fresh start for the same `scan_id` would silently no-op.
-pub fn start_suggestions<R: Runtime>(
+/// fresh start for the same `(scan_id, index)` would silently no-op.
+pub fn start_finding_suggestion<R: Runtime>(
     app: AppHandle<R>,
     scan_id: String,
+    index: usize,
     provider: Arc<dyn Provider>,
     cancel: CancellationToken,
     registry: Arc<SuggestionRegistry>,
 ) {
     tauri::async_runtime::spawn(async move {
-        let result = run(&app, &scan_id, provider.as_ref(), &cancel).await;
-        registry.clear(&scan_id);
+        let result = run_one(&app, &scan_id, index, provider.as_ref(), &cancel).await;
+        registry.clear(&scan_id, index);
         if let Err(e) = result {
-            tracing::warn!(scan_id = %scan_id, "suggestion driver failed: {e:#}");
+            tracing::warn!(scan_id = %scan_id, index, "suggestion driver failed: {e:#}");
             let _ = app.emit(
                 topic::SUGGESTION_DONE,
-                ScanSuggestionDone { scan_id, total: 0, failed: 0 },
+                ScanSuggestionDone { scan_id, total: 0, failed: 1 },
             );
         }
     });
 }
 
-async fn run<R: Runtime>(
+async fn run_one<R: Runtime>(
     app: &AppHandle<R>,
     scan_id: &str,
+    index: usize,
     provider: &dyn Provider,
     cancel: &CancellationToken,
 ) -> Result<()> {
@@ -199,54 +215,61 @@ async fn run<R: Runtime>(
         .with_context(|| format!("loading scan {scan_id}"))?;
     let report = &envelope.report;
     let items = collect_findings(report);
+    let Some(item) = items.get(index) else {
+        anyhow::bail!("finding index {index} out of range (have {})", items.len());
+    };
 
-    let mut emitted = 0usize;
-    let mut failed = 0usize;
-    let mut cancelled_overall = false;
-    for (i, item) in items.into_iter().enumerate() {
-        // Outer-loop check: a Stop click between two findings — don't kick
-        // off another LLM call. `suggest_one` handles mid-stream cancellation
-        // internally for its own iteration.
-        if cancel.is_cancelled() {
-            cancelled_overall = true;
-            break;
-        }
-        match suggest_one(app, scan_id, i, &item, provider, cancel).await {
-            Ok(_) => emitted += 1,
-            Err(e) => {
-                failed += 1;
-                tracing::warn!(
-                    scan_id = %scan_id,
-                    file = %item.file,
-                    line = item.line,
-                    "suggestion for finding failed: {e:#}"
-                );
-                // The row may have been opened via `SUGGESTION_START` already;
-                // without a closing `SUGGESTION` event the UI spinner would
-                // hang forever. Emit a synthetic final event so the row
-                // reconciles to a non-streaming state with an error body.
-                // Idempotent w.r.t. the row's existence: the UI handler always
-                // overwrites or creates.
-                let _ = app.emit(
-                    topic::SUGGESTION,
-                    ScanSuggestion {
-                        scan_id: scan_id.to_string(),
-                        index: i,
-                        source: item.source,
-                        kind: item.kind.clone(),
-                        severity: item.severity.clone(),
-                        file: item.file.clone(),
-                        line: item.line,
-                        name: item.name.clone(),
-                        suggestion: format!("⚠ failed to generate suggestion: {e:#}"),
-                    },
-                );
-            }
-        }
+    // If a Stop click landed before we even opened the stream, bail out
+    // cleanly with a `suggestion-done` so the UI flips its run-state flag.
+    if cancel.is_cancelled() {
+        let _ = app.emit(
+            topic::SUGGESTION_DONE,
+            ScanSuggestionDone {
+                scan_id: scan_id.to_string(),
+                total: 0,
+                failed: 0,
+            },
+        );
+        return Ok(());
     }
 
+    let result = suggest_one(app, scan_id, index, item, provider, cancel).await;
+
+    let (emitted, failed) = match result {
+        Ok(()) => (1usize, 0usize),
+        Err(e) => {
+            tracing::warn!(
+                scan_id = %scan_id,
+                index,
+                file = %item.file,
+                line = item.line,
+                "suggestion for finding failed: {e:#}"
+            );
+            // The row may have been opened via `SUGGESTION_START` already;
+            // without a closing `SUGGESTION` event the UI spinner would
+            // hang forever. Emit a synthetic final event so the row
+            // reconciles to a non-streaming state with an error body.
+            let _ = app.emit(
+                topic::SUGGESTION,
+                ScanSuggestion {
+                    scan_id: scan_id.to_string(),
+                    index,
+                    source: item.source,
+                    kind: item.kind.clone(),
+                    severity: item.severity.clone(),
+                    file: item.file.clone(),
+                    line: item.line,
+                    name: item.name.clone(),
+                    suggestion: format!("⚠ failed to generate suggestion: {e:#}"),
+                },
+            );
+            (0, 1)
+        }
+    };
+
     // SUGGESTION_DONE always fires — cancelled, errored, or completed. The
-    // UI uses this to flip the run-state flag and the "Regenerate" affordance.
+    // UI uses this to flip the row's run-state flag and re-enable the
+    // Study This button.
     let _ = app.emit(
         topic::SUGGESTION_DONE,
         ScanSuggestionDone {
@@ -255,9 +278,6 @@ async fn run<R: Runtime>(
             failed,
         },
     );
-    if cancelled_overall {
-        tracing::info!(scan_id = %scan_id, emitted, "suggestion driver stopped by user");
-    }
     Ok(())
 }
 
@@ -266,14 +286,14 @@ async fn run<R: Runtime>(
 /// repeating the LLM round-trip code. Single source of truth for the
 /// suggester's view of "what's worth fixing".
 #[derive(Debug, Clone, Serialize)]
-struct FindingItem {
-    source: &'static str,
-    kind: String,
-    severity: String,
-    name: String,
-    file: String,
-    line: usize,
-    message: String,
+pub struct FindingItem {
+    pub source: &'static str,
+    pub kind: String,
+    pub severity: String,
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+    pub message: String,
 }
 
 /// Flatten the report's findings into a single ranked list. Order:
@@ -283,7 +303,7 @@ struct FindingItem {
 ///
 /// We dedupe by (file, line, kind) so the same hotspot doesn't get three
 /// suggestions just because it surfaced in every lane.
-fn collect_findings(report: &Report) -> Vec<FindingItem> {
+pub fn collect_findings(report: &Report) -> Vec<FindingItem> {
     let s = &report.summary;
     let mut out: Vec<FindingItem> = Vec::new();
     let mut seen: std::collections::HashSet<(String, usize, String)> = Default::default();
@@ -423,8 +443,8 @@ async fn suggest_one<R: Runtime>(
     //    `stream.next()` is what makes a Stop click feel instant: when the
     //    cancel future fires, the stream future is dropped, which drops the
     //    underlying reqwest connection, which sends a TCP FIN to the
-    //    provider. The next iteration of the outer loop sees `is_cancelled`
-    //    and bails out, so we don't pay for another LLM call.
+    //    provider. The driver finalizes the row below with whatever has been
+    //    captured so far.
     //
     //    `biased;` makes the cancel branch checked first inside select! —
     //    avoids the "one more chunk after Stop" jitter when both futures
@@ -530,10 +550,12 @@ fn build_user_prompt(item: &FindingItem, window: &read_file_lines::Output) -> St
     let _ = writeln!(buf, "```");
     let _ = writeln!(
         buf,
-        "Propose ONE specific code change as a unified diff. Output:\n\
-         1. `Why: <one sentence>` rationale.\n\
-         2. A blank line.\n\
-         3. A fenced ```diff block with `@@` hunk header, `-` for removed lines, \
+        "Produce the output in the exact strict format from the system prompt:\n\
+         1. `problem_description_reasoning:` header, then paragraphs.\n\
+         2. Blank line.\n\
+         3. `solution_description_reasoning:` header, then paragraphs.\n\
+         4. Blank line.\n\
+         5. A fenced ```diff block with `@@` hunk header, `-` for removed lines, \
             `+` for added lines, single-space prefix for context. Use the line \
             numbers shown above. Keep the diff minimal — only changed lines plus \
             1–2 lines of context."

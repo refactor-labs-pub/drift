@@ -93,7 +93,9 @@ export default function SettingsPage() {
         {config && tab === "models" && (
           <ModelsTab config={config} status={status} refresh={refresh} switchTab={switchTab} />
         )}
-        {config && tab === "local" && <LocalRuntimesTab refresh={refresh} />}
+        {config && tab === "local" && (
+          <LocalRuntimesTab config={config} refresh={refresh} />
+        )}
         {config && tab === "providers" && (
           <ProvidersTab config={config} refresh={refresh} />
         )}
@@ -210,13 +212,52 @@ function StatusBadge({ status }: { status: BackendStatus }) {
   return <span className={`status-badge status-${status.kind}`}>{label}</span>;
 }
 
+/** Return the saved provider whose backend points at `(baseUrl, modelId)`,
+ *  or `null` if none. Only `api`-mode providers can match (local runtimes
+ *  always speak the OpenAI-compatible protocol). The base URL comparison is
+ *  trailing-slash tolerant — `http://localhost:11434` and
+ *  `http://localhost:11434/` are the same endpoint to a user, and serde
+ *  normalises only one of those forms depending on which path the value
+ *  was set through. */
+function findMatchingProvider(
+  config: AppConfig,
+  baseUrl: string,
+  modelId: string,
+): SavedProvider | null {
+  const want = baseUrl.replace(/\/+$/, "");
+  for (const p of config.providers) {
+    if (p.config.mode !== "api") continue;
+    if (p.config.model !== modelId) continue;
+    const have = p.config.base_url.replace(/\/+$/, "");
+    if (have === want) return p;
+  }
+  return null;
+}
+
 // ---------- Local Runtimes tab ----------
 //
 // Plug-and-play: probes every curated local OpenAI-compatible runtime
 // (Ollama, LM Studio, Docker Model Runner) in parallel and shows whichever
 // one the user already has installed and running. One click on a model
 // saves it as an Api provider pointed at the runtime's loopback URL.
-function LocalRuntimesTab({ refresh }: { refresh: () => Promise<void> }) {
+//
+// **Active mirror**: each row reads from `config.providers` to figure out
+// whether a saved provider already points at `(rt.baseUrl, modelId)`. The
+// row then renders one of three states:
+//   - "In use" badge + disabled button — this exact combo is the active
+//     provider, so clicking again would do nothing.
+//   - "Activate" button — a saved provider for this combo exists but
+//     another provider is currently active. One click flips the active
+//     pointer without creating a duplicate.
+//   - "Use this model" button — no saved provider yet; first click saves
+//     and activates.
+function LocalRuntimesTab({
+  config,
+  refresh,
+}: {
+  config: AppConfig;
+  refresh: () => Promise<void>;
+}) {
   const [runtimes, setRuntimes] = useState<DiscoveredRuntime[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activating, setActivating] = useState<string | null>(null);
@@ -264,13 +305,21 @@ function LocalRuntimesTab({ refresh }: { refresh: () => Promise<void> }) {
     }
     setActivating(`${rt.presetId}:${modelId}`);
     try {
-      const config: ModelBackendConfig = {
-        mode: "api",
-        base_url: rt.baseUrl,
-        api_key: "not-needed",
-        model: modelId,
-      };
-      await saveProvider(`${rt.name} · ${modelId}`, config, true);
+      // If a provider already points at this (base_url, model), reuse it
+      // instead of saving a duplicate. Saves clutter in the Providers tab
+      // when the user toggles between the same models repeatedly.
+      const existing = findMatchingProvider(config, rt.baseUrl, modelId);
+      if (existing) {
+        await activateProvider(existing.id);
+      } else {
+        const backend: ModelBackendConfig = {
+          mode: "api",
+          base_url: rt.baseUrl,
+          api_key: "not-needed",
+          model: modelId,
+        };
+        await saveProvider(`${rt.name} · ${modelId}`, backend, true);
+      }
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -378,23 +427,54 @@ function LocalRuntimesTab({ refresh }: { refresh: () => Promise<void> }) {
                 {rt.models.map((m) => {
                   const key = `${rt.presetId}:${m}`;
                   const blocked = !!rt.note;
+                  const match = findMatchingProvider(config, rt.baseUrl, m);
+                  const isActive =
+                    match !== null && match.id === config.activeProviderId;
+                  const isBusy = activating === key;
                   return (
-                    <div key={m} className="provider-row">
+                    <div
+                      key={m}
+                      className={`provider-row${isActive ? " is-active" : ""}`}
+                    >
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 500, wordBreak: "break-all" }}>{m}</div>
+                        <div
+                          style={{
+                            fontWeight: 500,
+                            wordBreak: "break-all",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          {m}
+                          {isActive && (
+                            <span className="status-badge status-ready">In use</span>
+                          )}
+                        </div>
                       </div>
                       <button
                         type="button"
                         className="primary-btn"
                         onClick={() => activate(rt, m)}
-                        disabled={activating === key}
-                        title={blocked ? rt.note : undefined}
+                        disabled={isBusy || isActive}
+                        title={
+                          blocked
+                            ? rt.note
+                            : isActive
+                              ? "This model is the active provider."
+                              : undefined
+                        }
                       >
-                        {activating === key
+                        {isBusy
                           ? "Activating…"
                           : blocked
                             ? "Setup needed"
-                            : "Use this model"}
+                            : isActive
+                              ? "In use"
+                              : match
+                                ? "Activate"
+                                : "Use this model"}
                       </button>
                     </div>
                   );

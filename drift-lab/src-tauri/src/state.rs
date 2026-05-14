@@ -39,12 +39,13 @@ pub struct AppState {
     /// commands can poke at it without re-plumbing.
     pub scan_pickers: Arc<PickerRegistry>,
 
-    /// Per-scan cancellation registry for the LLM suggestion driver. A Stop
-    /// click on the report page resolves to `SuggestionRegistry::cancel`,
-    /// which drops the underlying provider stream and lets the next outer-
-    /// loop tick exit cleanly. Held in `AppState` so both `start_scan_
-    /// suggestions` (registration) and `stop_scan_suggestions` (cancellation)
-    /// can share the map without re-plumbing through the runner.
+    /// Per-(scan, finding-index) cancellation registry for the LLM
+    /// suggestion driver. A Stop click on a row resolves to
+    /// `SuggestionRegistry::cancel`, which drops the underlying provider
+    /// stream and lets the driver finalize cleanly. Held in `AppState` so
+    /// both `start_scan_finding_suggestion` (registration) and
+    /// `stop_scan_finding_suggestion` (cancellation) can share the map
+    /// without re-plumbing through the runner.
     pub scan_suggestions: Arc<SuggestionRegistry>,
 }
 
