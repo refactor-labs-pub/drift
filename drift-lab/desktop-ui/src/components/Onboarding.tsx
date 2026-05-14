@@ -77,12 +77,25 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     setError(null);
     setStep("testing");
     const effectiveKey = picked.requiresApiKey ? apiKey : "not-needed";
-    const config: ModelBackendConfig = {
-      mode: "api",
-      base_url: picked.baseUrl,
-      api_key: effectiveKey,
-      model: model || picked.models[0] || "",
-    };
+    // Anthropic talks `/v1/messages` with `x-api-key`, not `/chat/completions`
+    // with `Authorization: Bearer`. The preset's `mode` decides which
+    // ModelBackend variant we persist — they share field names so it's just a
+    // tag swap, but everything downstream (test, save, provider impl) dispatches
+    // on it.
+    const config: ModelBackendConfig =
+      picked.mode === "anthropic"
+        ? {
+            mode: "anthropic",
+            base_url: picked.baseUrl,
+            api_key: effectiveKey,
+            model: model || picked.models[0] || "",
+          }
+        : {
+            mode: "api",
+            base_url: picked.baseUrl,
+            api_key: effectiveKey,
+            model: model || picked.models[0] || "",
+          };
     try {
       await testProvider(config);
       await saveProvider(picked.name, config, true);
@@ -356,15 +369,31 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
               />
             )}
 
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={fetchEndpointModels}
-              disabled={fetchingModels || !apiKey.trim()}
-              style={{ marginTop: 10 }}
-            >
-              {fetchingModels ? "Fetching…" : "Fetch available models from endpoint"}
-            </button>
+            {picked.mode === "anthropic" ? (
+              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                Anthropic doesn't expose an OpenAI-style <code>/v1/models</code>{" "}
+                listing — pick from the curated dropdown above, or type a model
+                ID from{" "}
+                <a
+                  href="https://docs.anthropic.com/en/docs/models-overview"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  the model docs
+                </a>
+                .
+              </p>
+            ) : (
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={fetchEndpointModels}
+                disabled={fetchingModels || !apiKey.trim()}
+                style={{ marginTop: 10 }}
+              >
+                {fetchingModels ? "Fetching…" : "Fetch available models from endpoint"}
+              </button>
+            )}
 
             {error && <div className="onboarding-error">{error}</div>}
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>

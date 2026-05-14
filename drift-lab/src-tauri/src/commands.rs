@@ -20,6 +20,40 @@ use crate::{
     workflow,
 };
 
+/// Optionally configure a `rig` agent builder with a token budget.
+///
+/// **Opt-in.** When `limit` is `None` (the default for both `chat` and
+/// `chat_oneshot`), we let OpenAI's server pick its model-appropriate
+/// default — that matches the canonical guidance in the
+/// [Chat Completions API reference](https://platform.openai.com/docs/api-reference/chat/create)
+/// and avoids fighting strict-validation deployments (Azure, LiteLLM)
+/// over a value that's just a cap, not a forced allocation.
+///
+/// When `limit` is `Some(N)`, we route through the right wire field:
+/// `rig::agent::AgentBuilder::max_tokens` always serialises as the JSON
+/// `"max_tokens"`, which GPT-5 / o-series reject with
+/// `400 unsupported_parameter` — so reasoning models go through
+/// `.additional_params(json)` to inject `max_completion_tokens` instead.
+fn with_token_budget<M>(
+    builder: rig::agent::AgentBuilder<M>,
+    model: &str,
+    limit: Option<u32>,
+) -> rig::agent::AgentBuilder<M>
+where
+    M: rig::completion::CompletionModel,
+{
+    let Some(limit) = limit else {
+        return builder;
+    };
+    let param = TokenLimitParam::for_model(model);
+    match param {
+        TokenLimitParam::MaxTokens => builder.max_tokens(limit as u64),
+        TokenLimitParam::MaxCompletionTokens => {
+            builder.additional_params(param.as_additional_params(limit))
+        }
+    }
+}
+
 /// Resolve the currently-pending `ask_user` question with the operator's
 /// free-text answer. The agent's `ask_user` tool was parked on a oneshot;
 /// this command sends through it and the agent loop resumes with `answer`
@@ -222,6 +256,7 @@ pub async fn chat<R: Runtime>(
                     .as_deref()
                     .unwrap_or("You are a helpful assistant embedded in Drift Lab."),
             );
+        let builder = with_token_budget(builder, &resolved.model, None);
         let agent = agent_tools::install(builder, toolset.unwrap_or_default()).build();
 
         // Start (or continue) a conversation. History is the prior messages —
@@ -323,15 +358,15 @@ pub async fn chat_oneshot<R: Runtime>(
         .as_ref()
         .ok_or_else(|| "backend not configured".to_string())?;
 
-    let agent = resolved
+    let builder = resolved
         .client
         .agent(&resolved.model)
         .preamble(
             preamble
                 .as_deref()
                 .unwrap_or("You are a helpful assistant embedded in Drift Lab."),
-        )
-        .build();
+        );
+    let agent = with_token_budget(builder, &resolved.model, None).build();
 
     agent.prompt(message).await.map_err(|e| e.to_string())
 }

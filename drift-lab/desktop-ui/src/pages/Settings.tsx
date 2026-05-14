@@ -559,12 +559,14 @@ function AddProviderForm({
     setError(null);
     setSaving(true);
     const effectiveKey = requiresKey ? apiKey : "not-needed";
-    const config: ModelBackendConfig = {
-      mode: "api",
-      base_url: baseUrl,
-      api_key: effectiveKey,
-      model,
-    };
+    // Dispatch on the preset's wire protocol. Anthropic's /v1/messages and
+    // the OpenAI-compat /chat/completions diverge enough that we persist
+    // them as two distinct `ModelBackend` variants — the provider factory
+    // (`agent::make_provider`) picks the right impl from the saved tag.
+    const config: ModelBackendConfig =
+      preset.mode === "anthropic"
+        ? { mode: "anthropic", base_url: baseUrl, api_key: effectiveKey, model }
+        : { mode: "api", base_url: baseUrl, api_key: effectiveKey, model };
     try {
       await testProvider(config);
       await saveProvider(name || preset.name, config, activate);
@@ -655,19 +657,34 @@ function AddProviderForm({
         />
       )}
 
-      <button
-        type="button"
-        className="ghost-btn"
-        onClick={fetchModels}
-        disabled={fetchingModels}
-        style={{ marginTop: 10 }}
-      >
-        {fetchingModels
-          ? "Fetching…"
-          : fetchedModels
-            ? `Refresh models (${fetchedModels.length})`
-            : "Fetch models from endpoint"}
-      </button>
+      {preset?.mode === "anthropic" ? (
+        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+          Anthropic doesn't expose <code>/v1/models</code> — pick from the
+          curated list or paste a model ID from the{" "}
+          <a
+            href="https://docs.anthropic.com/en/docs/models-overview"
+            target="_blank"
+            rel="noreferrer"
+          >
+            model docs
+          </a>
+          .
+        </p>
+      ) : (
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={fetchModels}
+          disabled={fetchingModels}
+          style={{ marginTop: 10 }}
+        >
+          {fetchingModels
+            ? "Fetching…"
+            : fetchedModels
+              ? `Refresh models (${fetchedModels.length})`
+              : "Fetch models from endpoint"}
+        </button>
+      )}
 
       {error && <div className="onboarding-error">{error}</div>}
 

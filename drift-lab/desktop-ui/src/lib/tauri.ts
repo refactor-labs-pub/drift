@@ -244,17 +244,30 @@ export async function onAgentEvent(
 
 // ---------- LLM agent backend ----------
 
-/** Every supported runtime — cloud or local — speaks OpenAI-compatible HTTP,
- *  so a single shape works for all of them. Local runtimes (Ollama, LM Studio,
- *  Docker Model Runner, vLLM, llama-server) are discovered via
- *  {@link probeLocalRuntimes} and saved as an `api` config pointing at their
- *  loopback base URL. */
-export type ModelBackendConfig = {
-  mode: "api";
-  base_url: string;
-  api_key: string;
-  model: string;
-};
+/** A saved backend config — one of two wire protocols. Mirrors
+ *  `crate::model_config::ModelBackend` (serde tag = "mode", lowercase).
+ *
+ *  - `api`: OpenAI-compatible HTTP. Covers cloud OpenAI, Groq, OpenRouter,
+ *    Azure, and every local runtime (Ollama, LM Studio, Docker Model
+ *    Runner, vLLM, llama-server). Local providers are discovered via
+ *    {@link probeLocalRuntimes} and saved with `api_key: "not-needed"`.
+ *  - `anthropic`: Claude's native `/v1/messages` shape. Distinct because
+ *    auth uses `x-api-key` instead of `Authorization: Bearer`, `max_tokens`
+ *    is required, and the SSE wire format differs in load-bearing ways.
+ *    Provider impl: `agent::anthropic::ClaudeProvider`. */
+export type ModelBackendConfig =
+  | {
+      mode: "api";
+      base_url: string;
+      api_key: string;
+      model: string;
+    }
+  | {
+      mode: "anthropic";
+      base_url: string;
+      api_key: string;
+      model: string;
+    };
 
 export async function configureBackend(config: ModelBackendConfig): Promise<void> {
   return invoke<void>("configure_backend", { config });
@@ -321,6 +334,12 @@ export async function onChatError(cb: (msg: string) => void): Promise<() => void
 
 // ---------- Multi-provider config (Phase 1.5) ----------
 
+/** Wire protocol a preset targets. Forwarded into the saved
+ *  `ModelBackendConfig.mode`. `api` for everything OpenAI-compatible,
+ *  `anthropic` for Claude (its `/v1/messages` shape is incompatible enough
+ *  to need its own path). */
+export type PresetMode = "api" | "anthropic";
+
 export interface ProviderPreset {
   id: string;
   name: string;
@@ -335,6 +354,10 @@ export interface ProviderPreset {
   requiresApiKey: boolean;
   /** One-line copy explaining how to install/start this provider. */
   description: string;
+  /** Which wire protocol this preset speaks. The Onboarding /
+   *  AddProviderForm flows read this to choose the `mode` they send to
+   *  `save_provider` / `test_provider`. Defaults to `api`. */
+  mode: PresetMode;
 }
 
 export interface SavedProvider {

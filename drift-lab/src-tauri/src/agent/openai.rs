@@ -68,6 +68,16 @@ impl TokenLimitParam {
             obj.insert(self.field_name().into(), serde_json::Value::from(limit));
         }
     }
+
+    /// As a JSON object suitable for clients that won't let us set the field
+    /// directly. Specifically `rig::agent::AgentBuilder` hardcodes
+    /// `"max_tokens"` in its OpenAI serializer (see
+    /// `rig-core/src/providers/openai/completion/mod.rs`) — for GPT-5 /
+    /// o-series we must override that via `.additional_params(json)` so the
+    /// wire body carries `max_completion_tokens` instead.
+    pub fn as_additional_params(self, limit: u32) -> serde_json::Value {
+        serde_json::json!({ self.field_name(): limit })
+    }
 }
 
 fn requires_completion_tokens(bare_model_lower: &str) -> bool {
@@ -106,20 +116,23 @@ fn extract_context_numbers(body: &str) -> (Option<u64>, Option<u64>) {
     (prompt, ctx)
 }
 
-/// Default streaming budget. Sized to cover reasoning models like GPT-5 / o1
-/// / o3, which charge their internal reasoning against the same budget as
-/// visible output — leaving it unset makes the server pick its own (often
-/// tiny) default and the model errors out mid-stream with:
-///   `Could not finish the message because max_tokens or model output limit
-///    was reached. Please try again with higher max_tokens.`
-/// 16K leaves headroom for both reasoning and a substantial answer.
-pub const DEFAULT_MAX_TOKENS: u32 = 16000;
-
+/// Per the official OpenAI Chat Completions reference
+/// (<https://platform.openai.com/docs/api-reference/chat/create>),
+/// `max_tokens` is **optional and deprecated** in favour of
+/// `max_completion_tokens`. The server picks a model-appropriate default
+/// (model max output minus prompt tokens for classic models) when neither
+/// field is sent, which is the right behaviour for almost every workload —
+/// hardcoding a number forces a cap that may clash with the model's own
+/// limit or with strict-validation deployments (Azure, LiteLLM proxies).
+///
+/// So we keep the budget **opt-in** via [`OpenAiProvider::with_max_tokens`].
+/// Callers that need a deterministic cap can set one; everyone else lets
+/// the server decide.
 pub struct OpenAiProvider {
     base_url: String,
     api_key: String,
     model: String,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
     http: reqwest::Client,
 }
 
@@ -129,13 +142,17 @@ impl OpenAiProvider {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
-            max_tokens: DEFAULT_MAX_TOKENS,
+            max_tokens: None,
             http: reqwest::Client::new(),
         }
     }
 
+    /// Cap the response to `max_tokens` tokens. The right wire field
+    /// (`max_tokens` vs `max_completion_tokens`) is picked automatically per
+    /// the [`TokenLimitParam`] policy, so this works for both classic and
+    /// reasoning models.
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = max_tokens;
+        self.max_tokens = Some(max_tokens);
         self
     }
 
@@ -173,11 +190,14 @@ impl OpenAiProvider {
             "stream": true,
             "stream_options": {"include_usage": true},
         });
-        // Pick `max_tokens` vs `max_completion_tokens` per the reasoning-model
-        // policy in [`TokenLimitParam`] — sending the wrong field 400s on
-        // GPT-5 / o-series, sending nothing yields a tiny server default and
-        // the model truncates mid-thought.
-        TokenLimitParam::for_model(&self.model).apply(&mut body, self.max_tokens);
+        // Only send a token limit if the caller explicitly set one — OpenAI's
+        // own reference recommends omitting `max_tokens` so the server picks
+        // a model-appropriate default. When set, route through
+        // [`TokenLimitParam`] so reasoning models get `max_completion_tokens`
+        // and classic models get `max_tokens`.
+        if let Some(limit) = self.max_tokens {
+            TokenLimitParam::for_model(&self.model).apply(&mut body, limit);
+        }
         if !wire_tools.is_empty() {
             body["tools"] = serde_json::Value::Array(wire_tools);
         }
@@ -586,49 +606,71 @@ mod tests {
     }
 
     #[test]
-    fn streaming_body_includes_max_tokens_for_classic_models() {
-        let p = OpenAiProvider::new("https://api.openai.com/v1", "sk", "gpt-4o");
-        let body = p.build_request_body("", &[Message::user("hi")], &[]);
-        assert_eq!(body["stream"], true);
-        assert_eq!(
-            body["max_tokens"].as_u64(),
-            Some(DEFAULT_MAX_TOKENS as u64),
-            "classic GPT models must receive max_tokens in the streaming body",
-        );
-        assert!(
-            body.get("max_completion_tokens").is_none(),
-            "must not send max_completion_tokens to classic models — it 400s",
-        );
-    }
-
-    #[test]
-    fn streaming_body_uses_max_completion_tokens_for_reasoning_models() {
-        // The exact scenario behind the user-reported 400:
-        //   "Could not finish the message because max_tokens or model output
-        //    limit was reached. Please try again with higher max_tokens."
-        // Reasoning models burn their budget on internal thinking; an unset
-        // server-side default truncates them mid-thought.
-        for model in ["gpt-5", "gpt-5.5", "gpt-5-mini", "o1", "o3-mini", "o4-mini"] {
+    fn streaming_body_omits_token_limit_by_default() {
+        // Per the OpenAI Chat Completions API reference, `max_tokens` is
+        // optional and the server picks a model-appropriate default when it
+        // isn't sent. Don't hardcode a cap that may clash with the model's
+        // own limit or with a strict-validation deployment.
+        for model in ["gpt-4o", "gpt-3.5-turbo", "gpt-5", "gpt-5.5", "o1-mini"] {
             let p = OpenAiProvider::new("https://api.openai.com/v1", "sk", model);
             let body = p.build_request_body("", &[Message::user("hi")], &[]);
-            assert_eq!(
-                body["max_completion_tokens"].as_u64(),
-                Some(DEFAULT_MAX_TOKENS as u64),
-                "{model}: reasoning models need max_completion_tokens, not max_tokens",
-            );
             assert!(
                 body.get("max_tokens").is_none(),
-                "{model}: must NOT send max_tokens (server returns 400 unsupported_parameter)",
+                "{model}: must not send max_tokens unless caller explicitly opts in",
+            );
+            assert!(
+                body.get("max_completion_tokens").is_none(),
+                "{model}: must not send max_completion_tokens unless caller opts in",
             );
         }
     }
 
     #[test]
-    fn with_max_tokens_overrides_the_default() {
+    fn with_max_tokens_routes_to_max_tokens_for_classic_models() {
         let p = OpenAiProvider::new("https://api.openai.com/v1", "sk", "gpt-4o")
-            .with_max_tokens(64000);
+            .with_max_tokens(8000);
         let body = p.build_request_body("", &[Message::user("hi")], &[]);
-        assert_eq!(body["max_tokens"], 64000);
+        assert_eq!(body["max_tokens"], 8000);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn with_max_tokens_routes_to_max_completion_tokens_for_reasoning_models() {
+        // The right wire field is still picked automatically — `max_tokens`
+        // on GPT-5 / o-series returns `400 unsupported_parameter`.
+        for model in ["gpt-5", "gpt-5.5", "gpt-5-mini", "o1", "o3-mini", "o4-mini"] {
+            let p = OpenAiProvider::new("https://api.openai.com/v1", "sk", model)
+                .with_max_tokens(32_000);
+            let body = p.build_request_body("", &[Message::user("hi")], &[]);
+            assert_eq!(
+                body["max_completion_tokens"], 32_000,
+                "{model}: explicit cap must route to max_completion_tokens",
+            );
+            assert!(
+                body.get("max_tokens").is_none(),
+                "{model}: never send the deprecated max_tokens field on reasoning models",
+            );
+        }
+    }
+
+    #[test]
+    fn as_additional_params_emits_field_with_limit() {
+        let reasoning = TokenLimitParam::for_model("gpt-5.5").as_additional_params(25_000);
+        assert_eq!(reasoning["max_completion_tokens"], 25_000);
+        assert!(reasoning.get("max_tokens").is_none());
+
+        let classic = TokenLimitParam::for_model("gpt-4o").as_additional_params(25_000);
+        assert_eq!(classic["max_tokens"], 25_000);
+        assert!(classic.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn as_additional_params_object_shape_matches_rig_additional_params_contract() {
+        // rig::agent::AgentBuilder::additional_params(serde_json::Value) merges
+        // the value into the request body as-is. The value must be a JSON object
+        // (not an array, not a string) for the merge to land the right field.
+        let v = TokenLimitParam::for_model("o3-mini").as_additional_params(25_000);
+        assert!(v.is_object(), "rig requires a JSON object for additional_params merging");
     }
 
     #[test]

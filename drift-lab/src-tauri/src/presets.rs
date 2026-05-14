@@ -3,6 +3,24 @@
 
 use serde::Serialize;
 
+/// Wire protocol a preset speaks downstream. The UI uses this to choose the
+/// `mode` it sends to `configure_backend` / `save_provider`: most cloud and
+/// every local provider use `Api` (OpenAI-compatible `/chat/completions`),
+/// while Anthropic alone uses its own `/v1/messages` shape with `x-api-key`.
+/// See [`crate::model_config::ModelBackend`] for the matching wire variants.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PresetMode {
+    /// OpenAI-compatible HTTP (`Authorization: Bearer …`, `/chat/completions`,
+    /// `/v1/models`). Covers OpenAI, Groq, OpenRouter, Azure, every local
+    /// runtime.
+    Api,
+    /// Anthropic Messages API (`x-api-key`, `anthropic-version`,
+    /// `/v1/messages`). Distinct from `Api` because the wire shape diverges
+    /// in load-bearing ways — see `agent::anthropic` for the full table.
+    Anthropic,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderPreset {
@@ -23,6 +41,10 @@ pub struct ProviderPreset {
     /// uses the same OpenAI-compatible HTTP shape downstream, this field
     /// just helps the user tell *where* the endpoint comes from.
     pub description: &'static str,
+    /// Which wire protocol the UI should target. Defaults to `Api` for the
+    /// 90% case; Anthropic flips this to `Anthropic` so the saved
+    /// `ModelBackend` lands on the right variant.
+    pub mode: PresetMode,
 }
 
 /// All providers — cloud or local — talk the same OpenAI HTTP shape:
@@ -39,6 +61,30 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "https://platform.openai.com/api-keys",
         requires_api_key: true,
         description: "OpenAI's hosted API. Bring your own key.",
+        mode: PresetMode::Api,
+    },
+    ProviderPreset {
+        id: "anthropic",
+        name: "Anthropic (Claude)",
+        // Anthropic's `/v1/messages` lives at the root, not under `/v1`.
+        // The provider itself appends `/v1/messages` — keep the base URL
+        // bare so it matches the docs the user copies from.
+        base_url: "https://api.anthropic.com",
+        // Models the iterative agent loop is known to work against. The
+        // `claude-*-latest` aliases auto-roll to the newest snapshot, while
+        // pinned IDs (e.g. `claude-opus-4-7`) let users lock to a known
+        // version. Refresh from <https://docs.anthropic.com/en/docs/models-overview>.
+        models: &[
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+        ],
+        api_key_url: "https://console.anthropic.com/settings/keys",
+        requires_api_key: true,
+        description: "Anthropic's hosted Claude. Native /v1/messages — full streaming + tool use.",
+        mode: PresetMode::Anthropic,
     },
     ProviderPreset {
         id: "groq",
@@ -48,6 +94,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "https://console.groq.com/keys",
         requires_api_key: true,
         description: "Hosted Llama / Qwen on Groq's LPU. OpenAI-compatible.",
+        mode: PresetMode::Api,
     },
     ProviderPreset {
         id: "openrouter",
@@ -56,7 +103,8 @@ pub const PRESETS: &[ProviderPreset] = &[
         models: &["openai/gpt-4o", "anthropic/claude-opus-4-7"],
         api_key_url: "https://openrouter.ai/keys",
         requires_api_key: true,
-        description: "Aggregator — one key, hundreds of models.",
+        description: "Aggregator — one key, hundreds of models. OpenAI-compatible shape.",
+        mode: PresetMode::Api,
     },
     // ----- Local OpenAI-compatible servers -----
     ProviderPreset {
@@ -67,6 +115,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "https://ollama.com",
         requires_api_key: false,
         description: "Runs models on this machine. Install Ollama, then `ollama pull <model>`.",
+        mode: PresetMode::Api,
     },
     ProviderPreset {
         id: "docker-model-runner",
@@ -79,6 +128,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "https://docs.docker.com/ai/model-runner/",
         requires_api_key: false,
         description: "Docker Desktop's built-in model runner. Enable in Settings → AI.",
+        mode: PresetMode::Api,
     },
     ProviderPreset {
         id: "lm-studio",
@@ -88,6 +138,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "https://lmstudio.ai",
         requires_api_key: false,
         description: "Desktop app for local models. Start the local server in LM Studio.",
+        mode: PresetMode::Api,
     },
     ProviderPreset {
         id: "custom",
@@ -97,6 +148,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_key_url: "",
         requires_api_key: false,
         description: "Any OpenAI-compatible HTTP endpoint — vLLM, llama-server, TGI, etc.",
+        mode: PresetMode::Api,
     },
 ];
 
