@@ -162,33 +162,35 @@ function FindingRow({
         <code className="scan-code">
           {finding.file}:{finding.line}
         </code>
-        <span className="muted" style={{ marginLeft: "auto" }}>
-          {finding.source.replace(/_/g, " ")}
-        </span>
-        {isStreaming ? (
-          <button
-            type="button"
-            className="scan-stop-btn scan-stop-btn-inline"
-            onClick={onStop}
-            title="Cancel the in-flight LLM suggestion for this finding."
-          >
-            <span className="scan-stop-btn-icon" aria-hidden />
-            Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="scan-study-btn"
-            onClick={onStudy}
-            title={
-              hasResult
-                ? "Re-run the LLM suggestion for this finding (appends a new version, doesn't replace history)."
-                : "Ask the model to explain this finding and suggest a fix."
-            }
-          >
-            {hasResult ? "Study again" : "Study this"}
-          </button>
-        )}
+        <div className="scan-suggestion-meta-actions">
+          <span className="muted">
+            {finding.source.replace(/_/g, " ")}
+          </span>
+          {isStreaming ? (
+            <button
+              type="button"
+              className="scan-stop-btn scan-stop-btn-inline"
+              onClick={onStop}
+              title="Cancel the in-flight LLM suggestion for this finding."
+            >
+              <span className="scan-stop-btn-icon" aria-hidden />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="scan-study-btn"
+              onClick={onStudy}
+              title={
+                hasResult
+                  ? "Re-run the LLM suggestion for this finding (appends a new version, doesn't replace history)."
+                  : "Ask the model to explain this finding and suggest a fix."
+              }
+            >
+              {hasResult ? "Study again" : "Study this"}
+            </button>
+          )}
+        </div>
       </div>
 
       {showVersionNav && (

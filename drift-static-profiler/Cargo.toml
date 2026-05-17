@@ -52,6 +52,17 @@ clap = { version = "4", features = ["derive"] }
 # Default features pull in `oldtime` and a windowsdll; we only need the
 # system-clock + formatter, so disable defaults and opt into `clock` only.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Generic SQL parser (Apache-2.0). Used by `sql_lint.rs` to parse SQL
+# string literals captured from source. Multi-dialect; picks Postgres /
+# MySQL / SQLite / MsSql / Snowflake / BigQuery / Generic based on
+# driver-import inference (see `sql_patterns.json` driver_dialect map).
+sqlparser = "0.62"
+# Real PostgreSQL parser (BSD-3 + Postgres license) — bindings to
+# libpg_query. Used when we know the SQL is Postgres-flavored: gives
+# the actual Postgres parse tree plus `normalize()` (replaces literals
+# with $1..$N) and `fingerprint()` (stable identity for dedup across
+# call sites). Falling back to `sqlparser` when the dialect is unknown.
+pg_query = "6"
 
 [dev-dependencies]
 # Validates emitted JSON reports against the published schema in the

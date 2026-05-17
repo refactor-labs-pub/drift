@@ -16,6 +16,7 @@ use crate::{
     progress::{NullProgress, Progress},
     report::Report,
     roots::{DiscoverOpts, DiscoveredRoot},
+    sql_lint::{SqlDialect, SqlFileOpts},
     tags::extract_tags_for_files,
     tree::{CallTreeNode, TreeBuilder},
     walker::{walk_files_classified_with, WalkOpts},
@@ -40,6 +41,18 @@ pub struct AnalyzeOptions {
     /// toggle so users analyzing a project where these dirs really hold
     /// hand-written source can disable the filter.
     pub exclude_static_assets: bool,
+    /// Run the `.sql`-file scan pass (plan §3.2). When `true`, drift
+    /// walks the project root for `*.sql` files, parses each with the
+    /// inferred dialect, and emits a synthetic entry per file
+    /// carrying the SQL rule findings. Default `true`. Opt-out via CLI
+    /// `--no-sql-files`.
+    pub scan_sql_files: bool,
+    /// Explicit SQL dialect override for the `.sql`-file scan pass.
+    /// When `None` (default), drift infers the dialect per-file from
+    /// path and sibling configs ([`crate::sql_lint::infer_dialect_for_path`]).
+    /// When `Some(d)`, every `.sql` file uses `d`, ignoring inference.
+    /// Driven by CLI `--sql-dialect <name>`.
+    pub sql_dialect_override: Option<SqlDialect>,
 }
 
 impl Default for AnalyzeOptions {
@@ -49,8 +62,23 @@ impl Default for AnalyzeOptions {
             skip_accessors: false,
             exclude_tests: false,
             exclude_static_assets: true,
+            scan_sql_files: true,
+            sql_dialect_override: None,
         }
     }
+}
+
+/// Materialize the `SqlFileOpts` Report::build expects, OR `None` to
+/// disable the pass entirely. Single source of truth for translating
+/// public `AnalyzeOptions` into private pipeline opts — keeps the
+/// `Report::build_with_progress` call sites identical.
+fn sql_file_opts_from(opts: &AnalyzeOptions) -> Option<SqlFileOpts> {
+    if !opts.scan_sql_files {
+        return None;
+    }
+    Some(SqlFileOpts {
+        dialect_override: opts.sql_dialect_override,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +280,7 @@ pub fn analyze_with_progress(
     // labels for the remaining sub-rollups, so the user never sees
     // "assembling report…" hang silently for minutes on a 700-entry
     // repo.
+    let sql_opts = sql_file_opts_from(opts);
     let report = Report::build_with_progress(
         &ctx.all_tags,
         &ctx.graph,
@@ -259,6 +288,7 @@ pub fn analyze_with_progress(
         &ctx.language_stats,
         Some(root),
         ctx.entry_declarations,
+        sql_opts.as_ref(),
         progress,
     );
     // NOTE: we deliberately do NOT call `progress.finish()` here.
@@ -318,6 +348,7 @@ pub fn analyze_roots_with_progress(
     // motivation — `analyze-root` with `--min-reach 1` produced the
     // 700+ entry case the user hit, which is exactly where the
     // per-pass progress matters most.
+    let sql_opts = sql_file_opts_from(opts);
     let report = Report::build_with_progress(
         &ctx.all_tags,
         &ctx.graph,
@@ -325,6 +356,7 @@ pub fn analyze_roots_with_progress(
         &ctx.language_stats,
         Some(root),
         ctx.entry_declarations,
+        sql_opts.as_ref(),
         progress,
     );
     // NOTE: we deliberately do NOT call `progress.finish()` here.
@@ -423,6 +455,7 @@ where
     let ids = vec![picked.id.clone()];
     let mut roots = build_trees_from_ids(&ctx, root, &ids, opts, progress);
     docker::label_call_tree_entries(&ctx.entry_declarations, &mut roots);
+    let sql_opts = sql_file_opts_from(opts);
     let report = Report::build_with_progress(
         &ctx.all_tags,
         &ctx.graph,
@@ -430,6 +463,7 @@ where
         &ctx.language_stats,
         Some(root),
         ctx.entry_declarations,
+        sql_opts.as_ref(),
         progress,
     );
     Ok(Some(AnalyzeOutcome {

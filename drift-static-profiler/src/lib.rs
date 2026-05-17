@@ -5,6 +5,7 @@ pub mod docker;
 pub mod graph;
 pub mod manifest;
 pub mod insights;
+pub mod languages;
 pub mod linguist;
 pub mod metrics;
 pub mod pagerank;
@@ -13,6 +14,8 @@ pub mod progress;
 pub mod report;
 pub mod roots;
 pub mod scans_index;
+pub mod sql_ast;
+pub mod sql_lint;
 pub mod tags;
 pub mod tree;
 pub mod walker;
@@ -96,6 +99,13 @@ pub struct Reference {
     pub line: usize,
     pub byte_offset: usize,
     pub in_symbol: Option<String>,
+    /// Captured SQL text when this call is a known SQL sink
+    /// (e.g. `cursor.execute("SELECT …")`, `sqlx::query!("…")`,
+    /// Knex `raw("…")`). Tree-sitter SQL-sink patterns in
+    /// `tags.rs` stamp this; `None` for every other reference.
+    /// Optional + skipped-when-None so old fixtures round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql_literal: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

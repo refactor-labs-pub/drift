@@ -2662,6 +2662,15 @@ button { font-family: inherit; }
   flex: 0 1 auto;
   overflow-wrap: anywhere;
 }
+/* Source label + action button (Study this / Stop) are grouped so they
+ * wrap as a single right-aligned unit. Without this group the button
+ * could land alone on its own wrapped line and end up flush-left. */
+.scan-suggestion-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
 /* Version-history nav: rendered between the row's metadata header and
  * the suggestion body. Shows up only when versions.length >= 2 so the
  * default single-version display stays clean. */

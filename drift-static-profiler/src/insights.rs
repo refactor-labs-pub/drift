@@ -83,6 +83,27 @@ pub enum FindingKind {
     /// scales with traffic. Better-named cousin of "overkill logs".
     /// SonarQube tag analog: `pitfall` (works now, will hurt at scale).
     LogAmplification,
+    /// A SQL string matches a known **query-shape** anti-pattern —
+    /// `SELECT *`, missing `WHERE` on DELETE/UPDATE, implicit columns
+    /// in INSERT, leading-wildcard `LIKE`, etc. Fires on embedded SQL
+    /// literals (`cursor.execute("…")`) AND on statements inside `.sql`
+    /// files alike — the rule recognizes the AST shape, not the source.
+    /// Carries the rule id (e.g. `SQL001`) in `evidence[0].call`.
+    /// Detector lives in `src/sql_lint.rs` under the `SQL*` prefix.
+    SqlAntipattern,
+    /// A DDL statement matches a known **migration-safety** hazard —
+    /// `CREATE INDEX` without `CONCURRENTLY`, `DROP COLUMN`, `ALTER
+    /// COLUMN … TYPE`, `ADD CONSTRAINT … FOREIGN KEY` without
+    /// `NOT VALID`, `ADD COLUMN … NOT NULL` without `DEFAULT`, etc.
+    /// Distinct from [`Self::SqlAntipattern`] because the concern is
+    /// "this schema change will cause an outage during deploy", not
+    /// "this query is inefficient" — different audience (ops vs app
+    /// dev), different severity calibration, different remediation
+    /// playbook. Catalog sources: squawk (clean-room) + strong_migrations.
+    /// Carries the rule id (e.g. `MIG_CREATE_INDEX_NOT_CONCURRENT`) in
+    /// `evidence[0].call`. Detector lives in `src/sql_lint.rs` under
+    /// the `MIG_*` prefix.
+    MigrationSafety,
 }
 
 impl FindingKind {
@@ -99,6 +120,8 @@ impl FindingKind {
             FindingKind::ExpensiveCompute => "expensive_compute",
             FindingKind::MissingCaching => "missing_caching",
             FindingKind::LogAmplification => "log_amplification",
+            FindingKind::SqlAntipattern => "sql_antipattern",
+            FindingKind::MigrationSafety => "migration_safety",
         }
     }
 }
@@ -364,8 +387,62 @@ pub fn collect_immediate_fixes(
             .then_with(|| a.file.cmp(&b.file))
             .then_with(|| a.line.cmp(&b.line))
     });
+    // Per-kind cap — diversity gate so no single rule pack monopolizes
+    // the top-N. Reason: a repo with 300 high-severity MIG findings on
+    // .sql migrations would otherwise displace every code-level finding
+    // (n_plus_one, missing_caching, expensive_compute, …) from the
+    // user-visible "what should I fix now?" list — the desktop app's
+    // 24-row Insights pane would show 24 migrations and zero code.
+    // Algorithm: keep severity ordering (high beats medium), but admit
+    // a finding only if its kind's quota isn't exhausted. Quota is
+    // `max(3, cap/4)` so the top-N is guaranteed to be at least
+    // 4-kind-diverse when 4+ kinds have qualifying findings.
+    out = enforce_per_kind_cap(out, |f| f.kind, per_kind_quota(cap));
     out.truncate(cap);
     out
+}
+
+/// Per-kind quota that admits at least 3 findings of any present kind
+/// but caps any single kind at one-quarter of the overall cap.
+///
+/// Examples:
+///   - cap 24 → quota 6   (4 kinds × 6 = 24)
+///   - cap 50 → quota 12  (4 kinds × 12 = 48)
+///   - cap 12 → quota 3   (4 kinds × 3 = 12; floor kicks in)
+fn per_kind_quota(cap: usize) -> usize {
+    (cap / 4).max(3)
+}
+
+/// Diversity gate. Walks `items` in their pre-sorted order (caller is
+/// responsible for sorting first) and admits each item only when its
+/// kind's accumulated count is below `quota`. Returns the diversified
+/// list — same order as the input, just with items past their kind's
+/// quota dropped.
+///
+/// Generic over the item + key extractor so the same primitive serves
+/// `collect_immediate_fixes`, `collect_findings_top`, and any future
+/// "diverse top-N" rollup. SRP-clean and unit-testable in isolation.
+fn enforce_per_kind_cap<T, K, F>(items: Vec<T>, key: F, quota: usize) -> Vec<T>
+where
+    K: std::hash::Hash + Eq,
+    F: Fn(&T) -> K,
+{
+    if quota == 0 {
+        return Vec::new();
+    }
+    let mut by_kind: std::collections::HashMap<K, usize> = std::collections::HashMap::new();
+    items
+        .into_iter()
+        .filter(|it| {
+            let n = by_kind.entry(key(it)).or_insert(0);
+            if *n < quota {
+                *n += 1;
+                true
+            } else {
+                false
+            }
+        })
+        .collect()
 }
 
 /// Quick-win pointer row for `Summary.immediate_fixes`.
@@ -1180,6 +1257,11 @@ pub fn collect_findings_top(
         walk_for_top(e, &mut out);
     }
     out.sort_by(|a, b| severity_rank(b.severity).cmp(&severity_rank(a.severity)));
+    // Per-kind diversity gate — same reasoning as `collect_immediate_fixes`:
+    // one rule pack with hundreds of high-severity findings must not push
+    // every other kind out of the visible top-N. See `enforce_per_kind_cap`
+    // for the algorithm.
+    out = enforce_per_kind_cap(out, |f| f.kind, per_kind_quota(cap));
     out.truncate(cap);
     out
 }
@@ -1329,5 +1411,143 @@ mod tests {
         };
         let out = collect_node_findings(&sym, &[], &Ctx::default());
         assert!(out.is_empty(), "step-1 invariant: detectors are no-ops");
+    }
+
+    // ── Per-kind diversity gate ─────────────────────────────────────
+    //
+    // The desktop app (drift-lab) caps at 24 visible findings; without
+    // these tests, a single rule pack with hundreds of high-severity
+    // findings (e.g. 315 migration_safety on a .sql-heavy repo) would
+    // displace every code-level finding from the user's view. Pin the
+    // diversity invariants so a future change can't regress silently.
+
+    #[test]
+    fn per_kind_quota_examples() {
+        // Documented mapping: cap 24 → 6 per kind, cap 50 → 12 per kind,
+        // cap 12 → 3 per kind (floor kicks in).
+        assert_eq!(per_kind_quota(24), 6);
+        assert_eq!(per_kind_quota(50), 12);
+        assert_eq!(per_kind_quota(12), 3);
+        assert_eq!(per_kind_quota(0), 3, "floor still applies at cap=0");
+    }
+
+    #[test]
+    fn enforce_per_kind_cap_admits_up_to_quota_per_kind() {
+        // 10 of kind A followed by 10 of kind B. Quota 3 → 3 As + 3 Bs.
+        let items: Vec<(&str, usize)> = (0..10).map(|i| ("A", i)).chain((0..10).map(|i| ("B", i))).collect();
+        let out = enforce_per_kind_cap(items, |it| it.0, 3);
+        let by_kind: std::collections::HashMap<&str, usize> = out.iter().fold(
+            std::collections::HashMap::new(),
+            |mut m, it| { *m.entry(it.0).or_insert(0) += 1; m },
+        );
+        assert_eq!(by_kind.get("A").copied().unwrap_or(0), 3);
+        assert_eq!(by_kind.get("B").copied().unwrap_or(0), 3);
+        assert_eq!(out.len(), 6);
+    }
+
+    #[test]
+    fn enforce_per_kind_cap_preserves_sort_order_within_admitted_set() {
+        // Input is pre-sorted by some criterion; the gate must keep
+        // FIRST-N of each kind (the highest-priority ones). 0..3 of A
+        // and 0..3 of B should appear in their original positions.
+        let items: Vec<(&str, usize)> = vec![
+            ("A", 0), ("B", 0), ("A", 1), ("B", 1),
+            ("A", 2), ("B", 2), ("A", 3), ("B", 3),
+        ];
+        let out = enforce_per_kind_cap(items, |it| it.0, 2);
+        // Expect: A0, B0, A1, B1 — kind quota 2 means the third A
+        // and third B are dropped.
+        assert_eq!(out, vec![("A", 0), ("B", 0), ("A", 1), ("B", 1)]);
+    }
+
+    #[test]
+    fn collect_immediate_fixes_diversifies_when_one_kind_dominates() {
+        // Build a synthetic tree where one node has 100 high-severity
+        // migration_safety findings (the db-mcp case) plus 5 medium-severity
+        // missing_caching findings. Without the diversity gate, the top-24
+        // would be all migration_safety. With the gate, missing_caching
+        // must still appear.
+        use crate::tree::CallTreeNode;
+        use crate::graph::SymbolId;
+        use crate::SymbolKind;
+        use std::collections::BTreeMap;
+
+        let mut findings = Vec::new();
+        // 100 high-severity / trivial-effort migration_safety.
+        for i in 0..100 {
+            findings.push(Finding {
+                kind: FindingKind::MigrationSafety,
+                severity: Severity::High,
+                effort: Effort::Trivial,
+                confidence: 0.9,
+                line: i + 1,
+                message: format!("migration {i}"),
+                evidence: vec![Evidence { call: "MIG_X".into(), line: i + 1, category: None }],
+                remediation: None,
+            });
+        }
+        // 5 medium-severity / small-effort missing_caching.
+        for i in 0..5 {
+            findings.push(Finding {
+                kind: FindingKind::MissingCaching,
+                severity: Severity::Medium,
+                effort: Effort::Small,
+                confidence: 0.7,
+                line: 1000 + i,
+                message: format!("cache {i}"),
+                evidence: vec![],
+                remediation: None,
+            });
+        }
+        let node = CallTreeNode {
+            id: SymbolId("synth::1".into()),
+            name: "synth".into(),
+            kind: SymbolKind::Function,
+            file: "synth.rs".into(),
+            line: 1,
+            depth: 0,
+            parent_class: None,
+            children: vec![],
+            truncated_reason: None,
+            callers: vec![],
+            callers_count: 0,
+            callees_count: 0,
+            subtree_size: 1,
+            category_self: None,
+            categories_reached: BTreeMap::new(),
+            external_calls: vec![],
+            complexity: 1,
+            loc: 1,
+            nesting_depth: 0,
+            parameter_count: 0,
+            is_async: false,
+            call_site_count: 0,
+            is_recursive: false,
+            pagerank: 0.0,
+            percent_total: 0.0,
+            percent_parent: 0.0,
+            n_plus_one_risk: false,
+            blocking_in_async: false,
+            findings,
+            entry_labels: vec![],
+        };
+        let fixes = collect_immediate_fixes(&[node], 24);
+        let by_kind: std::collections::HashMap<FindingKind, usize> = fixes
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut m, f| {
+                *m.entry(f.kind).or_insert(0) += 1;
+                m
+            });
+        // Quota for cap=24 is 6 → at most 6 migration_safety in the top 24.
+        assert!(
+            by_kind.get(&FindingKind::MigrationSafety).copied().unwrap_or(0) <= 6,
+            "migration_safety must be capped at 6 (cap/4) when 100 exist; got {by_kind:?}",
+        );
+        // All 5 missing_caching findings must survive (under quota of 6).
+        assert_eq!(
+            by_kind.get(&FindingKind::MissingCaching).copied().unwrap_or(0),
+            5,
+            "all 5 missing_caching findings must survive — diversity gate must not drop them; got {by_kind:?}",
+        );
     }
 }

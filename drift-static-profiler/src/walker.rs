@@ -271,6 +271,40 @@ pub fn discover_source_files_with(root: &Path, opts: &WalkOpts) -> Vec<(PathBuf,
         .collect()
 }
 
+/// Discover every `.sql` file under `root` respecting the same walker
+/// hygiene rules as source discovery (gitignore, driftignore, test-dir
+/// filter when `opts.exclude_tests`, default ignore dirs).
+///
+/// **Why a separate function and not an extra `Language` variant?**
+/// `.sql` files don't have callable symbols, callers, callees, or any
+/// of the call-graph machinery the per-language tree-sitter pipeline
+/// assumes. They're pure-content inputs to the SQL Query Analyzer —
+/// orthogonal to the language-dominance filter that `discover_source_files`
+/// applies. A `.sql` file inside a Python repo would otherwise be
+/// filtered out as "not Python" and never reach the SQL rule engine.
+///
+/// Returns absolute paths. Case-insensitive extension match (so `*.SQL`
+/// on case-preserving filesystems doesn't get missed).
+pub fn discover_sql_files(root: &Path) -> Vec<PathBuf> {
+    discover_sql_files_with(root, &WalkOpts::default())
+}
+
+/// Walker-options-aware variant of [`discover_sql_files`].
+pub fn discover_sql_files_with(root: &Path, opts: &WalkOpts) -> Vec<PathBuf> {
+    walk_files_with(root, opts)
+        .into_iter()
+        .filter_map(|(p, _)| {
+            let ext = p.extension()?.to_str()?;
+            // ASCII-case-insensitive match: `.sql` and `.SQL`.
+            if ext.eq_ignore_ascii_case("sql") {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Walk every file under `root` honoring the same ignore semantics as
 /// [`discover_source_files_with`], but WITHOUT filtering by language. Returns
 /// `(path, byte_len)` per file.
@@ -373,6 +407,18 @@ pub fn walk_files_classified_with(
             continue;
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        // Minified-bundle filter — path-independent guard against the
+        // "one huge JS bundle hijacks the dominant-language picker"
+        // failure mode. STATIC_ASSET_DIRS catches `static/`/`assets/`
+        // but real-world projects also ship bundles under
+        // `web/public/`, `dist/`, custom subdirs we can't enumerate.
+        // The content-shape detector below catches them by signature
+        // (avg line length, whitespace ratio) — the same approach
+        // JetBrains/SonarQube use. Off when `exclude_static_assets`
+        // is off so users analyzing a literal bundle can opt in.
+        if opts.exclude_static_assets && is_likely_minified_bundle(path, size) {
+            continue;
+        }
         // Single dispatch: `classify` already maps the extension to
         // both the linguist name+kind AND the supported `Language` (when
         // we ship a parser for it). Reading `info.supported` here
@@ -421,6 +467,92 @@ fn hits_static_asset_ignore(path: &Path) -> bool {
             .map(|s| STATIC_ASSET_DIRS.contains(&s))
             .unwrap_or(false)
     })
+}
+
+/// Cheap minified-bundle detector. Returns `true` for files whose
+/// content shape matches a minified JS/CSS/JSON bundle (very long
+/// avg line length AND very low whitespace ratio).
+///
+/// # Why content-shape, not path
+///
+/// `STATIC_ASSET_DIRS` (`static/`, `assets/`) is a heuristic guess at
+/// *where* bundles live. Real-world projects ship bundles under
+/// `web/public/`, `dist/`, custom subdirs, etc. — paths we can't
+/// enumerate. The actual failure mode is: one ≥1 MB minified bundle
+/// dominates the byte-share linguist computation, drift picks that
+/// language as "profiled", and the user's real source is silently
+/// excluded.
+///
+/// JetBrains and SonarQube use the same content-shape recognizer:
+/// minified files have ≥500 chars per line on average AND ≤10%
+/// whitespace bytes. Real source averages ~80 chars/line and 20-30%
+/// whitespace. The signal is unambiguous in the corner cases that
+/// matter — it never false-positives on hand-written source unless
+/// somebody one-lined their entire file, which would be its own
+/// pathology.
+///
+/// # Why size-gated
+///
+/// Reading bytes from disk is non-free. We only run this check on
+/// files ≥ `MIN_SIZE_FOR_MINIFIED_CHECK` (256 KB). Below that, a
+/// "bundle" can't displace the language-share calculation enough to
+/// matter (the cumulative threshold for hijacking depends on total
+/// repo bytes, but 256 KB is well below practical concern).
+fn is_likely_minified_bundle(path: &Path, size: u64) -> bool {
+    /// Only consider files large enough that, if minified, they would
+    /// realistically pull the dominant-language picker. Below this size,
+    /// even a perfect bundle can't displace a normal repo's source.
+    const MIN_SIZE_FOR_MINIFIED_CHECK: u64 = 256 * 1024;
+    /// Average chars per line. Real source: ~80. Minified: >>500.
+    /// 500 is conservative — Webpack/Rollup bundles routinely exceed
+    /// 10,000 chars/line.
+    const MIN_AVG_LINE_LEN: u64 = 500;
+    /// Whitespace byte ratio (0.0..=1.0). Real source: 0.20-0.35.
+    /// Minified: <0.10 (whitespace stripped except newlines).
+    const MAX_WHITESPACE_RATIO: f64 = 0.10;
+    /// How many bytes to sample from the file head. 64 KB is plenty
+    /// for the avg-line-length / whitespace-ratio computation to
+    /// stabilize. Tiny vs file size doesn't matter — bundle shape
+    /// is consistent.
+    const SAMPLE_BYTES: usize = 64 * 1024;
+    /// Only run on extensions that are commonly bundled. Avoids
+    /// inadvertently flagging large-but-legitimate data files we
+    /// happen to have parsed (rare; defensive).
+    const BUNDLED_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "css", "json", "html"];
+
+    if size < MIN_SIZE_FOR_MINIFIED_CHECK {
+        return false;
+    }
+    let ext_ok = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| BUNDLED_EXTENSIONS.iter().any(|x| s.eq_ignore_ascii_case(x)))
+        .unwrap_or(false);
+    if !ext_ok {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    use std::io::Read;
+    let mut buf = vec![0u8; SAMPLE_BYTES.min(size as usize)];
+    let n = match (&file).take(buf.len() as u64).read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    if n == 0 {
+        return false;
+    }
+    let sample = &buf[..n];
+    let newlines = sample.iter().filter(|b| **b == b'\n').count().max(1);
+    let avg_line_len = (n as u64) / (newlines as u64);
+    if avg_line_len < MIN_AVG_LINE_LEN {
+        return false;
+    }
+    let ws = sample
+        .iter()
+        .filter(|b| matches!(**b, b' ' | b'\t' | b'\n' | b'\r'))
+        .count();
+    let ws_ratio = (ws as f64) / (n as f64);
+    ws_ratio < MAX_WHITESPACE_RATIO
 }
 
 #[cfg(test)]
@@ -1226,6 +1358,128 @@ mod tests {
             );
         }
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── Minified-bundle detector ──────────────────────────────────
+
+    #[test]
+    fn minified_detector_skips_files_under_size_threshold() {
+        // Even if content shape matches, files <256 KB don't trigger
+        // (they can't displace the dominant-language picker enough to
+        // matter, and reading bytes from disk on every file would slow
+        // down monorepo walks).
+        let root = tmp_dir("minified-small");
+        let p = root.join("tiny.js");
+        // 64 KB of pure-minified shape — but below MIN_SIZE.
+        let content = "x".repeat(64 * 1024);
+        fs::write(&p, &content).unwrap();
+        assert!(
+            !is_likely_minified_bundle(&p, content.len() as u64),
+            "small files should never be flagged minified"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn minified_detector_skips_extensions_outside_bundled_set() {
+        // A 1 MB .md or .csv file with long lines is not a bundle.
+        let root = tmp_dir("minified-ext");
+        let p = root.join("data.csv");
+        let line = "a".repeat(2000) + "\n";
+        let content = line.repeat(200); // ~400 KB, every line 2000 chars
+        fs::write(&p, &content).unwrap();
+        assert!(
+            !is_likely_minified_bundle(&p, content.len() as u64),
+            ".csv must not be flagged regardless of line shape"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn minified_detector_flags_typical_bundle_shape() {
+        // The signature: large file, >500 chars/line avg, <10% whitespace,
+        // bundled extension. This is the exact failure mode that hijacked
+        // the user's db-mcp scan (one 9.5 MB main.test.js in web/public/).
+        let root = tmp_dir("minified-pos");
+        let p = root.join("main.bundle.js");
+        // 1024 chars, just 1 space → near-zero whitespace ratio.
+        let chunk = format!(
+            "var{}={};",
+            "x".repeat(508),
+            "1".repeat(509),
+        );
+        // Repeat to ~512 KB, all on near-zero lines (one newline per chunk).
+        let mut content = String::with_capacity(512 * 1024);
+        while content.len() < 512 * 1024 {
+            content.push_str(&chunk);
+            content.push('\n');
+        }
+        fs::write(&p, &content).unwrap();
+        assert!(
+            is_likely_minified_bundle(&p, content.len() as u64),
+            "1 MB JS file with 1000-char lines and ~0% whitespace must be flagged",
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn minified_detector_does_not_flag_real_source() {
+        // Hand-written source: short lines, plenty of whitespace.
+        let root = tmp_dir("minified-neg");
+        let p = root.join("real.js");
+        let line = "  const x = computeValue(args, options);\n";
+        // Repeat to ~512 KB. Each line ~40 chars, ~25% whitespace.
+        let mut content = String::with_capacity(512 * 1024);
+        while content.len() < 512 * 1024 {
+            content.push_str(line);
+        }
+        fs::write(&p, &content).unwrap();
+        assert!(
+            !is_likely_minified_bundle(&p, content.len() as u64),
+            "real source with 40-char lines and indentation must NOT be flagged",
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn walker_skips_minified_bundle_so_language_picker_holds() {
+        // End-to-end: a repo with 10 small TS files + 1 huge minified JS
+        // bundle. Default walker (exclude_static_assets=true) must skip
+        // the bundle so the TS files dominate. Without this filter, the
+        // bundle's bytes hijack the language picker — exactly the
+        // db-mcp `web/public/main.test.js` failure mode.
+        let root = tmp_dir("walker-minified-bundle");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("web/public")).unwrap();
+        // 10 small TS files
+        for i in 0..10 {
+            fs::write(
+                root.join(format!("src/m{i}.ts")),
+                "export const x = 1;\nexport function f() { return x; }\n",
+            )
+            .unwrap();
+        }
+        // 1 minified bundle, not in static/assets — sneaks past path filter.
+        let chunk = format!("var{}={};", "x".repeat(508), "1".repeat(509));
+        let mut content = String::with_capacity(512 * 1024);
+        while content.len() < 512 * 1024 {
+            content.push_str(&chunk);
+            content.push('\n');
+        }
+        fs::write(root.join("web/public/main.bundle.js"), &content).unwrap();
+
+        let opts = WalkOpts::default();
+        let files = discover_source_files_with(&root, &opts);
+        let names = rel(&root, &files);
+        assert!(
+            !names.iter().any(|n| n.contains("main.bundle.js")),
+            "minified bundle must be filtered; got {names:?}",
+        );
+        assert!(
+            names.iter().filter(|n| n.ends_with(".ts")).count() == 10,
+            "all 10 TS files must survive; got {names:?}",
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

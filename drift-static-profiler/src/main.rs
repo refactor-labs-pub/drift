@@ -29,6 +29,27 @@ fn pick_progress() -> Box<dyn Progress> {
     }
 }
 
+/// Parse the user-facing CLI `--sql-dialect <NAME>` value into the
+/// internal enum. Returns `Ok(None)` when the flag wasn't passed;
+/// returns `Err` with a friendly message when the name is unknown so
+/// the user sees the accepted set up-front rather than discovering it
+/// only when a `.sql` file fails to parse.
+fn resolve_sql_dialect(
+    name: Option<&str>,
+) -> Result<Option<drift_static_profiler::sql_lint::SqlDialect>> {
+    match name {
+        None => Ok(None),
+        Some(s) => drift_static_profiler::sql_lint::SqlDialect::parse(s)
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown --sql-dialect {s:?}; accepted: postgres, mysql, \
+                     sqlite, mssql, snowflake, bigquery, generic"
+                )
+            }),
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "drift-static-profiler", version, about = "Static call-tree analyzer")]
 struct Cli {
@@ -94,6 +115,17 @@ enum Cmd {
         /// `*.test.ts`, `*_test.go`, `test_*.py`, `*Test.java`).
         #[arg(long)]
         no_tests: bool,
+        /// Skip the `.sql` file scan pass (plan §3.2). By default
+        /// drift walks the project for `*.sql` files, parses each with
+        /// the inferred dialect, and reports SQL-rule findings as
+        /// synthetic entries.
+        #[arg(long)]
+        no_sql_files: bool,
+        /// Force a SQL dialect for the `.sql` file scan. Overrides
+        /// drift's per-file inference. Accepted values: postgres,
+        /// mysql, sqlite, mssql, snowflake, bigquery, generic.
+        #[arg(long, value_name = "DIALECT")]
+        sql_dialect: Option<String>,
         /// Also print the ASCII call tree to stdout
         #[arg(long)]
         print: bool,
@@ -150,6 +182,17 @@ enum Cmd {
         /// `findings_top`. Implies `--no-tests` semantics in `roots.rs` too.
         #[arg(long)]
         no_tests: bool,
+        /// Skip the `.sql` file scan pass (plan §3.2). By default
+        /// drift walks the project for `*.sql` files, parses each with
+        /// the inferred dialect, and reports SQL-rule findings as
+        /// synthetic entries.
+        #[arg(long)]
+        no_sql_files: bool,
+        /// Force a SQL dialect for the `.sql` file scan. Overrides
+        /// drift's per-file inference. Accepted values: postgres,
+        /// mysql, sqlite, mssql, snowflake, bigquery, generic.
+        #[arg(long, value_name = "DIALECT")]
+        sql_dialect: Option<String>,
         /// Also print the discovered roots table to stderr
         #[arg(long)]
         print: bool,
@@ -264,8 +307,21 @@ fn main() -> Result<()> {
             max_depth,
             no_accessors,
             no_tests,
+            no_sql_files,
+            sql_dialect,
             print,
-        } => run_scan(&path, &entry, &name, &out_dir, max_depth, no_accessors, no_tests, print),
+        } => run_scan(
+            &path,
+            &entry,
+            &name,
+            &out_dir,
+            max_depth,
+            no_accessors,
+            no_tests,
+            no_sql_files,
+            sql_dialect.as_deref(),
+            print,
+        ),
         Cmd::AnalyzeRoot {
             path,
             name,
@@ -278,6 +334,8 @@ fn main() -> Result<()> {
             max_depth,
             no_accessors,
             no_tests,
+            no_sql_files,
+            sql_dialect,
             print,
         } => run_analyze_root(
             &path,
@@ -291,6 +349,8 @@ fn main() -> Result<()> {
             max_depth,
             no_accessors,
             no_tests,
+            no_sql_files,
+            sql_dialect.as_deref(),
             print,
         ),
     }
@@ -379,9 +439,12 @@ fn run_scan(
     max_depth: usize,
     no_accessors: bool,
     no_tests: bool,
+    no_sql_files: bool,
+    sql_dialect: Option<&str>,
     print: bool,
 ) -> Result<()> {
     let progress = pick_progress();
+    let sql_dialect_override = resolve_sql_dialect(sql_dialect)?;
     let outcome = analyze_with_progress(
         root,
         entries,
@@ -389,6 +452,8 @@ fn run_scan(
             max_depth,
             skip_accessors: no_accessors,
             exclude_tests: no_tests,
+            scan_sql_files: !no_sql_files,
+            sql_dialect_override,
             ..AnalyzeOptions::default()
         },
         progress.as_ref(),
@@ -490,6 +555,8 @@ fn run_analyze_root(
     max_depth: usize,
     no_accessors: bool,
     no_tests: bool,
+    no_sql_files: bool,
+    sql_dialect: Option<&str>,
     print: bool,
 ) -> Result<()> {
     // `--no-tests` (walker-level filter) implies `--no-include-tests`
@@ -505,6 +572,7 @@ fn run_analyze_root(
         max_roots,
     };
     let progress = pick_progress();
+    let sql_dialect_override = resolve_sql_dialect(sql_dialect)?;
     let outcome = analyze_roots_with_progress(
         root,
         &discover,
@@ -512,6 +580,8 @@ fn run_analyze_root(
             max_depth,
             skip_accessors: no_accessors,
             exclude_tests: no_tests,
+            scan_sql_files: !no_sql_files,
+            sql_dialect_override,
             ..AnalyzeOptions::default()
         },
         progress.as_ref(),

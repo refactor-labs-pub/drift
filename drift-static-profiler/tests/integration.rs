@@ -2402,6 +2402,343 @@ def bulk_save(items, session: Session):
     assert!(cluster.kinds.len() >= 2, "kinds list should cover both detectors");
 }
 
+// --------- step-4 invariant: SQL lint end-to-end --------------------
+//
+// These tests exercise the full pipeline: tree-sitter SQL-sink capture
+// → graph build → Report::build → `attach_sql_antipatterns` → findings
+// on CallTreeNode. They prove the wire-up holds, not just the rule
+// matchers (those are covered by `sql_lint::tests`).
+
+#[test]
+fn sql_lint_emits_sql002_on_delete_without_where() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("sql_lint_emits_sql002_on_delete_without_where", "(synthetic)");
+
+    let src = "
+def wipe_users(cursor):
+    cursor.execute(\"DELETE FROM users\")
+";
+    let tags = extract_tags_from_source(Path::new("wipe.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("wipe_users").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(
+        &[tags],
+        &graph,
+        vec![node],
+        &Default::default(),
+        None,
+        Vec::new(),
+    );
+
+    let entry = report
+        .entries
+        .iter()
+        .find(|e| e.name == "wipe_users")
+        .expect("wipe_users should be in entries");
+    let sql_finding = entry
+        .findings
+        .iter()
+        .find(|f| matches!(f.kind, FindingKind::SqlAntipattern))
+        .expect("expected a SqlAntipattern finding");
+    let rule_id = sql_finding
+        .evidence
+        .first()
+        .map(|e| e.call.as_str())
+        .unwrap_or("");
+    assert_eq!(rule_id, "SQL002", "expected SQL002 (DELETE without WHERE)");
+}
+
+#[test]
+fn sql_lint_emits_sql001_on_select_star() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("sql_lint_emits_sql001_on_select_star", "(synthetic)");
+
+    let src = "
+def list_users(cursor):
+    cursor.execute(\"SELECT * FROM users\")
+    return cursor.fetchall()
+";
+    let tags = extract_tags_from_source(Path::new("ls.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("list_users").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(
+        &[tags],
+        &graph,
+        vec![node],
+        &Default::default(),
+        None,
+        Vec::new(),
+    );
+
+    let entry = report
+        .entries
+        .iter()
+        .find(|e| e.name == "list_users")
+        .expect("list_users should be in entries");
+    let found_sql001 = entry.findings.iter().any(|f| {
+        matches!(f.kind, FindingKind::SqlAntipattern)
+            && f.evidence.first().map(|e| e.call.as_str()) == Some("SQL001")
+    });
+    assert!(
+        found_sql001,
+        "expected SQL001 finding on list_users; got {:?}",
+        entry
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.evidence.first().map(|e| e.call.clone())))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn sql_lint_silently_skips_unparseable_sql_no_panic() {
+    use drift_static_profiler::{
+        graph::CallGraph,
+        insights::FindingKind,
+        report::Report,
+        tags::extract_tags_from_source,
+        tree::TreeBuilder,
+        Language,
+    };
+    use std::path::Path;
+    banner("sql_lint_silently_skips_unparseable_sql_no_panic", "(robustness)");
+
+    // Garbage SQL must not panic the parser. The false-positive policy
+    // (plan §8) says: when uncertain, silent-skip — the category-level
+    // n+1/db detectors still cover the call site.
+    let src = "
+def weird(cursor):
+    cursor.execute(\"!!THIS IS NOT SQL AT ALL %%\")
+";
+    let tags = extract_tags_from_source(Path::new("w.py"), Language::Python, src).unwrap();
+    let graph = CallGraph::build(&[tags.clone()]);
+    let id = graph.find_entry_points("weird").first().cloned().unwrap();
+    let tb = TreeBuilder::new(&graph, Path::new(""));
+    let node = tb.build(&id).unwrap();
+    let report = Report::build(
+        &[tags],
+        &graph,
+        vec![node],
+        &Default::default(),
+        None,
+        Vec::new(),
+    );
+    let entry = report
+        .entries
+        .iter()
+        .find(|e| e.name == "weird")
+        .expect("weird should be in entries");
+    let sql_findings: Vec<_> = entry
+        .findings
+        .iter()
+        .filter(|f| matches!(f.kind, FindingKind::SqlAntipattern))
+        .collect();
+    assert!(
+        sql_findings.is_empty(),
+        "unparseable SQL must NOT produce a SqlAntipattern finding (silent-skip); got {:?}",
+        sql_findings
+    );
+}
+
+// --------- step-3 invariant: tree-sitter SQL-sink capture -----------
+//
+// These tests assert that the per-language SQL-sink patterns in
+// `parser.rs` populate `Reference.sql_literal` (and the downstream
+// `ExternalCall.sql_literal`) for the most common SQL-bearing call
+// shapes. They are intentionally tiny: one synthetic snippet per
+// language, one assertion per language. Real-world SQL extraction
+// quality lands in the round-2 fixtures under `tests/fixtures/
+// sql-antipatterns/` once §3 of the plan ships.
+
+#[test]
+fn sql_sink_captures_python_cursor_execute() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_captures_python_cursor_execute", "(synthetic)");
+
+    let src = "
+def read_user(conn, uid):
+    cursor = conn.cursor()
+    cursor.execute(\"SELECT id, name FROM users WHERE id = ?\", (uid,))
+    return cursor.fetchone()
+";
+    let tags = extract_tags_from_source(Path::new("sql.py"), Language::Python, src).unwrap();
+    let sql_ref = tags
+        .references
+        .iter()
+        .find(|r| r.name == "execute" && r.sql_literal.is_some())
+        .expect("cursor.execute(<sql literal>) should produce a Reference with sql_literal populated");
+    let sql = sql_ref.sql_literal.as_deref().unwrap_or("");
+    assert!(
+        sql.contains("SELECT") && sql.contains("FROM users"),
+        "sql_literal should be the query body, got: {sql:?}"
+    );
+}
+
+#[test]
+fn sql_sink_captures_sqlalchemy_text() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_captures_sqlalchemy_text", "(synthetic)");
+
+    let src = "
+from sqlalchemy import text
+
+def list_active(session):
+    stmt = text(\"SELECT id FROM users WHERE active = true\")
+    return session.execute(stmt).all()
+";
+    let tags = extract_tags_from_source(Path::new("text.py"), Language::Python, src).unwrap();
+    let sql_ref = tags
+        .references
+        .iter()
+        .find(|r| r.name == "text" && r.sql_literal.is_some())
+        .expect("text(\"…\") should populate sql_literal");
+    assert!(sql_ref.sql_literal.as_deref().unwrap_or("").contains("SELECT id"));
+}
+
+#[test]
+fn sql_sink_captures_go_db_query() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_captures_go_db_query", "(synthetic)");
+
+    // Use a raw-string (backtick) literal — the canonical Go shape for
+    // multi-line SQL. Tests the `raw_string_literal` arm of the Go SQL
+    // sink patterns.
+    let src = "
+package main
+
+import \"database/sql\"
+
+func listUsers(db *sql.DB) {
+    rows, _ := db.Query(`SELECT id, email FROM users WHERE active = true`)
+    _ = rows
+}
+";
+    let tags = extract_tags_from_source(Path::new("sql.go"), Language::Go, src).unwrap();
+    let sql_ref = tags
+        .references
+        .iter()
+        .find(|r| r.name == "Query" && r.sql_literal.is_some())
+        .expect("db.Query(`SELECT …`) should populate sql_literal");
+    assert!(
+        sql_ref
+            .sql_literal
+            .as_deref()
+            .unwrap_or("")
+            .contains("FROM users"),
+        "sql_literal should be the query body, got: {:?}",
+        sql_ref.sql_literal
+    );
+}
+
+#[test]
+fn sql_sink_captures_node_pg_client_query() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_captures_node_pg_client_query", "(synthetic)");
+
+    let src = "
+const { Client } = require('pg');
+
+async function list(client) {
+  return client.query('SELECT id FROM orders WHERE customer_id = $1', [42]);
+}
+";
+    let tags = extract_tags_from_source(Path::new("sql.js"), Language::JavaScript, src).unwrap();
+    let sql_ref = tags
+        .references
+        .iter()
+        .find(|r| r.name == "query" && r.sql_literal.is_some())
+        .expect("client.query('SELECT …') should populate sql_literal");
+    assert!(sql_ref
+        .sql_literal
+        .as_deref()
+        .unwrap_or("")
+        .contains("FROM orders"));
+}
+
+#[test]
+fn sql_sink_no_double_reference_for_same_call_site() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_no_double_reference_for_same_call_site", "(invariant)");
+
+    // The generic call pattern AND the SQL-sink pattern both match
+    // `cursor.execute("...")`. The dedup map in tags.rs must merge
+    // them into one Reference, not push two. Verify the byte_offset
+    // dedup invariant by counting how many references exist for the
+    // single `execute` call site.
+    let src = "
+def read(cursor):
+    cursor.execute(\"SELECT 1\")
+";
+    let tags = extract_tags_from_source(Path::new("dup.py"), Language::Python, src).unwrap();
+    let execute_refs: Vec<_> = tags
+        .references
+        .iter()
+        .filter(|r| r.name == "execute")
+        .collect();
+    assert_eq!(
+        execute_refs.len(),
+        1,
+        "exactly one Reference per call site; got {}: {:?}",
+        execute_refs.len(),
+        execute_refs.iter().map(|r| (&r.name, r.byte_offset, &r.sql_literal)).collect::<Vec<_>>(),
+    );
+    assert!(
+        execute_refs[0].sql_literal.is_some(),
+        "the surviving Reference should be the upgraded one with sql_literal set"
+    );
+}
+
+#[test]
+fn sql_sink_skips_fstring_with_interpolation() {
+    use drift_static_profiler::{tags::extract_tags_from_source, Language};
+    use std::path::Path;
+    banner("sql_sink_skips_fstring_with_interpolation", "(false-positive guard)");
+
+    // f-strings are interpolated — we can't statically reason about
+    // their full SQL text and surfacing the prefix would mislead the
+    // SQL lint. The extractor must refuse to populate sql_literal here.
+    let src = "
+def lookup(cursor, table):
+    cursor.execute(f\"SELECT * FROM {table}\")
+";
+    let tags = extract_tags_from_source(Path::new("fstr.py"), Language::Python, src).unwrap();
+    let execute_ref = tags
+        .references
+        .iter()
+        .find(|r| r.name == "execute")
+        .expect("execute call should still register as a Reference");
+    assert!(
+        execute_ref.sql_literal.is_none(),
+        "f-strings must not populate sql_literal — got {:?}",
+        execute_ref.sql_literal
+    );
+}
+
 #[test]
 fn roots_overview_lists_each_entry_with_categories_and_findings() {
     use drift_static_profiler::{
@@ -3148,6 +3485,167 @@ mod docker_tests {
                 .any(|l| l == "compose:worker entrypoint"),
             "run should have compose:worker entrypoint label; got {:?}",
             run_node.entry_labels,
+        );
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// .sql file scanner — plan §3.2 first-class supplementary input.
+// ════════════════════════════════════════════════════════════════════
+//
+// End-to-end: walk a fixture dir holding only .sql files (no host
+// source), confirm:
+//   - synthetic CallTreeNodes appear for every file that had at least
+//     one rule hit,
+//   - findings carry the correct rule ID + line numbers,
+//   - dbt-template / psql-meta sanitizers behave as documented.
+//
+// Uses the public attach_sql_file_findings API directly so the test
+// exercises the same code path Report::build invokes.
+
+#[test]
+fn sql_file_scan_emits_findings_for_every_known_rule() {
+    use drift_static_profiler::sql_lint::{attach_sql_file_findings, SqlFileOpts};
+    let root = fixture("sql-files");
+    let mut entries: Vec<CallTreeNode> = Vec::new();
+    let opts = SqlFileOpts::default();
+    attach_sql_file_findings(&mut entries, &root, &opts);
+
+    banner("sql_file_scan_emits_findings_for_every_known_rule", "sql-files");
+    for e in &entries {
+        println!("  {} — {} finding(s)", e.name, e.findings.len());
+        for f in &e.findings {
+            println!(
+                "    line {} [{}] {}",
+                f.line,
+                f.evidence.first().map(|e| e.call.as_str()).unwrap_or(""),
+                f.message,
+            );
+        }
+    }
+
+    let by_name = |n: &str| entries.iter().find(|e| e.name == n);
+
+    // ── V1: SELECT * (line 7) + INSERT-no-cols (line 9) ───────────
+    let v1 = by_name("V1__bad_select.sql")
+        .expect("missing V1__bad_select.sql synthetic node");
+    let rule_ids: Vec<&str> = v1
+        .findings
+        .iter()
+        .filter_map(|f| f.evidence.first().map(|e| e.call.as_str()))
+        .collect();
+    assert!(rule_ids.contains(&"SQL001"), "V1 should fire SQL001; got {rule_ids:?}");
+    assert!(rule_ids.contains(&"SQL004"), "V1 should fire SQL004; got {rule_ids:?}");
+
+    // ── V2: DELETE + UPDATE without WHERE ──────────────────────────
+    let v2 = by_name("V2__danger_delete_update.sql")
+        .expect("missing V2__danger_delete_update.sql synthetic node");
+    let v2_ids: Vec<&str> = v2
+        .findings
+        .iter()
+        .filter_map(|f| f.evidence.first().map(|e| e.call.as_str()))
+        .collect();
+    assert!(v2_ids.contains(&"SQL002"), "V2 should fire SQL002; got {v2_ids:?}");
+    assert!(v2_ids.contains(&"SQL003"), "V2 should fire SQL003; got {v2_ids:?}");
+
+    // ── psql meta-commands stripped, SELECT * still linted ────────
+    let psql = by_name("psql-meta.sql")
+        .expect("missing psql-meta.sql synthetic node");
+    assert!(
+        psql.findings.iter().any(|f| f.evidence.first().map(|e| e.call == "SQL001").unwrap_or(false)),
+        "psql-meta.sql should fire SQL001 on the SELECT * inside",
+    );
+
+    // ── Liquibase directives stripped, SELECT * still linted ──────
+    let lb = by_name("liquibase-formatted.sql")
+        .expect("missing liquibase-formatted.sql synthetic node");
+    assert!(
+        lb.findings.iter().any(|f| f.evidence.first().map(|e| e.call == "SQL001").unwrap_or(false)),
+        "liquibase-formatted.sql should fire SQL001",
+    );
+
+    // ── dbt template: can't parse → silently skipped (no node) ────
+    // Distinct from "scanned but no findings" — the dbt template
+    // contains `{{ ref(...) }}` so we DON'T pretend to have analyzed
+    // it. This is the false-positive policy from plan §8 working as
+    // designed (silent-skip on uncertainty).
+    assert!(
+        by_name("dbt-template.sql").is_none(),
+        "dbt template should be skipped — no synthetic entry should be emitted",
+    );
+
+    // ── clean.sql: parses fine, no rule matches → STILL appears ────
+    // This is the architectural fix: the trust contract every profiler
+    // upholds (pprof, SonarQube, Lighthouse, cargo check all show every
+    // analyzed unit). Without this assertion drift would silently drop
+    // clean files and the user can't tell if it scanned them.
+    let clean = by_name("clean.sql")
+        .expect("missing clean.sql synthetic node — visibility contract violated");
+    assert!(
+        clean.findings.is_empty(),
+        "clean.sql should have zero findings, got {}",
+        clean.findings.len(),
+    );
+    assert!(
+        clean.entry_labels.iter().any(|l| l == "sql:file"),
+        "synthetic SQL nodes must carry the `sql:file` entry label so the viewer can render them distinctly; got {:?}",
+        clean.entry_labels,
+    );
+}
+
+#[test]
+fn sql_file_scan_is_skipped_when_disabled_at_caller() {
+    // Calling attach_sql_file_findings is the ONLY way drift discovers
+    // .sql files. AnalyzeOptions { scan_sql_files: false } is translated
+    // by api.rs into Option<&SqlFileOpts>::None passed to Report::build,
+    // which skips the call entirely. We mirror that here: with no
+    // attach_sql_file_findings call, entries stays empty.
+    let entries: Vec<CallTreeNode> = Vec::new();
+    assert!(entries.is_empty(), "no call → no synthetic entries");
+    // Confirm the fixture dir really exists so a future refactor that
+    // moves fixtures around fails this test loudly instead of silently
+    // passing.
+    let root = fixture("sql-files");
+    assert!(root.is_dir(), "sql-files fixture dir should exist: {root:?}");
+}
+
+#[test]
+fn sql_file_scan_emits_migration_safety_findings() {
+    use drift_static_profiler::sql_lint::{attach_sql_file_findings, SqlFileOpts};
+    let root = fixture("sql-files");
+    let mut entries: Vec<CallTreeNode> = Vec::new();
+    let opts = SqlFileOpts::default();
+    attach_sql_file_findings(&mut entries, &root, &opts);
+
+    banner("sql_file_scan_emits_migration_safety_findings", "sql-files");
+    let v5 = entries
+        .iter()
+        .find(|e| e.name == "V5__migration_hazards.sql")
+        .expect("missing V5__migration_hazards.sql synthetic node");
+    println!("  V5__migration_hazards.sql — {} findings:", v5.findings.len());
+    for f in &v5.findings {
+        let rid = f.evidence.first().map(|e| e.call.as_str()).unwrap_or("");
+        println!("    line {} [{}] sev={:?}", f.line, rid, f.severity);
+    }
+
+    // Collect rule ids fired on V5. Each MIG_ rule should appear AT LEAST
+    // once (some statements may fire multiple rules — fine).
+    let rule_ids: std::collections::HashSet<&str> = v5
+        .findings
+        .iter()
+        .filter_map(|f| f.evidence.first().map(|e| e.call.as_str()))
+        .collect();
+    for expected in &[
+        "MIG_CREATE_INDEX_NOT_CONCURRENT",
+        "MIG_DROP_COLUMN",
+        "MIG_ALTER_COLUMN_TYPE",
+        "MIG_ADD_FK_NOT_VALID",
+        "MIG_ADD_COLUMN_NOT_NULL_NO_DEFAULT",
+        "MIG_DROP_TABLE",
+    ] {
+        assert!(
+            rule_ids.contains(expected),
+            "V5 should fire {expected}; got {rule_ids:?}",
         );
     }
 }

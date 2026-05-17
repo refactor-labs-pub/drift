@@ -76,6 +76,21 @@ pub struct Summary {
     /// in-graph symbol it most likely launches. See `docker.rs`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entry_declarations: Vec<EntryDecl>,
+
+    /// Number of `.sql` files drift scanned in this run. `None` when
+    /// the `.sql` file pass was disabled (`--no-sql-files`). The
+    /// matching synthetic `CallTreeNode`s live under `entries[]` and
+    /// carry `entry_labels: ["sql:file"]` so the viewer can render
+    /// them as a group. Pairs with `sql_files_with_findings` so the
+    /// summary can say "scanned 7, 3 had problems" at a glance —
+    /// the trust-contract invariant every profiler upholds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql_files_scanned: Option<usize>,
+    /// Number of `.sql` files that produced at least one finding.
+    /// `None` when the `.sql` file pass was disabled. `Some(0)` means
+    /// "scanned files, all clean" — distinguishable from "didn't scan".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql_files_with_findings: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +152,7 @@ impl Report {
             language_stats,
             source_root,
             entry_declarations,
+            None,
             &NullProgress,
         )
     }
@@ -163,6 +179,11 @@ impl Report {
         language_stats: &LanguageStats,
         source_root: Option<&Path>,
         entry_declarations: Vec<EntryDecl>,
+        // `Some(opts)` enables the `.sql` file scan pass; `None`
+        // skips it entirely (CLI `--no-sql-files`). The pass also
+        // requires `source_root` to be set — without a root there's
+        // nowhere to walk for `*.sql` files.
+        sql_file_opts: Option<&crate::sql_lint::SqlFileOpts>,
         progress: &dyn Progress,
     ) -> Self {
         // Phase E2: cross-tree finding passes that need graph-wide info.
@@ -215,6 +236,37 @@ impl Report {
             progress,
             |e| insights::attach_hot_zones(std::slice::from_mut(e), pagerank_p90),
         );
+        // SQL antipattern lint: parse every `ExternalCall.sql_literal`
+        // (captured by the per-language SQL-sink tree-sitter patterns)
+        // and emit `SqlAntipattern` findings. Pure-data rule catalog
+        // lives in src/sql_lint.rs — adding rules is append-only.
+        for_each_entry(
+            &mut entries,
+            "attaching sql antipattern findings",
+            progress,
+            |e| crate::sql_lint::attach_sql_antipatterns(std::slice::from_mut(e)),
+        );
+
+        // `.sql`-file scan pass — plan §3.2 first-class supplementary
+        // input. Walks the project root for `*.sql`, runs the same rule
+        // catalog, and appends a synthetic `CallTreeNode` per file
+        // (always — see scan_sql_files_into's contract; the "trust
+        // invariant" of every profiler is that scanned units appear).
+        // Skipped when:
+        //   - the caller passed `sql_file_opts: None`
+        //     (CLI `--no-sql-files`),
+        //   - or `source_root` is None (library callers that built
+        //     `entries` manually have nothing to walk).
+        // Runs BEFORE `bump_severities_by_impact` so any future
+        // pagerank-aware bumping on synthetic nodes Just Works.
+        let sql_file_stats: Option<crate::sql_lint::SqlFileScanStats> =
+            if let (Some(opts), Some(root)) = (sql_file_opts, source_root) {
+                progress.phase("scanning .sql files…");
+                Some(crate::sql_lint::scan_sql_files_into(&mut entries, root, opts))
+            } else {
+                None
+            };
+
         // IMPORTANT: severity bumping must run LAST so it sees every
         // finding the prior passes produced. Without it, every finding
         // stays at its base severity regardless of where it sits in the
@@ -264,7 +316,7 @@ impl Report {
         // Summary's own sub-passes get their own progress phases. See
         // `Summary::build_with_progress` for the breakdown.
         let _ = total; // silence unused on cfg(test) paths
-        let summary = Summary::build_with_progress(
+        let mut summary = Summary::build_with_progress(
             all_tags,
             graph,
             &entries,
@@ -272,6 +324,15 @@ impl Report {
             entry_declarations,
             progress,
         );
+        // Stamp the .sql scan stats onto the summary — see
+        // `Summary.sql_files_scanned` doc for the trust-contract
+        // reasoning. `Some(0)` means "scanned, all clean" which is
+        // distinguishable from `None` ("didn't scan") at the
+        // wire-format level.
+        if let Some(s) = sql_file_stats {
+            summary.sql_files_scanned = Some(s.scanned);
+            summary.sql_files_with_findings = Some(s.with_findings);
+        }
         Self {
             schema_version: "1.0".into(),
             mode: "static".into(),
@@ -331,24 +392,48 @@ fn dedupe_findings_across_trees(entries: &mut [CallTreeNode]) {
     use crate::insights::FindingKind;
     use std::collections::HashSet;
 
-    fn walk(
-        node: &mut CallTreeNode,
-        seen: &mut HashSet<(SymbolId, FindingKind)>,
-    ) {
-        // `HashSet::insert` returns true iff the value was newly
-        // inserted, false if already present. `retain` keeps the
-        // first occurrence (insert returns true) and drops every
-        // subsequent duplicate (insert returns false). No extra
-        // allocation per finding — we just clone the SymbolId for
-        // the hash key, which is cheap.
-        node.findings
-            .retain(|f| seen.insert((node.id.clone(), f.kind)));
+    // Dedup key: (SymbolId, FindingKind, rule_id_chip, line).
+    //
+    // Why the 4-tuple — each axis carries non-overlapping intent:
+    //
+    //   * SymbolId  — same fact about the SAME unit duplicates when a
+    //                 symbol is reached by 30 entry trees (the original
+    //                 motivating case: 13,765→hundreds reduction).
+    //   * FindingKind — different *kinds* are by definition distinct
+    //                   facts even if other axes match.
+    //   * rule_id_chip (from `evidence[0].call` when present, "" else)
+    //                — two rules of the same kind on the same symbol
+    //                  ARE different findings (e.g. SQL001 + SQL004
+    //                  on one `.sql` migration). Without this, the
+    //                  multi-rule case collapsed to one survivor.
+    //   * line       — different STATEMENTS at different lines are
+    //                  different findings. A `.sql` dump with 100
+    //                  `CREATE INDEX` hazards must produce 100 rows,
+    //                  not 1 — otherwise scale-of-risk is hidden and
+    //                  the user underestimates remediation work by
+    //                  the dedup factor (50x on the supabase_dump case).
+    //
+    // For non-synthetic nodes (real symbols reached by N trees), every
+    // visit of the same node has the same `line` (the symbol's def
+    // line), so the historical "1 finding per (symbol, kind, rule)"
+    // collapse still happens for them.
+    type DedupKey = (SymbolId, FindingKind, String, usize);
+
+    fn walk(node: &mut CallTreeNode, seen: &mut HashSet<DedupKey>) {
+        node.findings.retain(|f| {
+            let rule_id = f
+                .evidence
+                .first()
+                .map(|e| e.call.clone())
+                .unwrap_or_default();
+            seen.insert((node.id.clone(), f.kind, rule_id, f.line))
+        });
         for c in node.children.iter_mut() {
             walk(c, seen);
         }
     }
 
-    let mut seen: HashSet<(SymbolId, FindingKind)> = HashSet::new();
+    let mut seen: HashSet<DedupKey> = HashSet::new();
     for e in entries.iter_mut() {
         walk(e, &mut seen);
     }
@@ -654,6 +739,12 @@ impl Summary {
             immediate_fixes,
             refactor_candidates,
             entry_declarations,
+            // Default to None — Summary::build doesn't know whether
+            // the orchestrator ran the .sql file pass. Report::build
+            // stamps the real values on AFTER this returns (see the
+            // `if let Some(s) = sql_file_stats` block).
+            sql_files_scanned: None,
+            sql_files_with_findings: None,
         }
     }
 }

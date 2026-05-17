@@ -29,6 +29,12 @@ pub struct ExternalCall {
     pub line: usize,
     pub in_loop: bool,
     pub in_await: bool,
+    /// Captured SQL text for known SQL-sink calls. Carried forward from
+    /// `Reference.sql_literal` so SQL lint detectors don't have to walk
+    /// references back from each call site. `None` for every non-SQL
+    /// call. Optional + skipped-when-None so old fixtures round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql_literal: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +169,7 @@ impl CallGraph {
                             line: r.line,
                             in_loop,
                             in_await,
+                            sql_literal: r.sql_literal.clone(),
                         });
                     }
                 }

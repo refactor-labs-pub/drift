@@ -17,7 +17,8 @@ export type FindingKind =
   | 'hot_zone'
   | 'expensive_compute'
   | 'missing_caching'
-  | 'log_amplification';
+  | 'log_amplification'
+  | 'sql_antipattern';
 
 export interface Evidence {
   call: string;
@@ -557,6 +558,7 @@ export const FINDING_KIND_LABEL: Record<FindingKind, string> = {
   expensive_compute: 'EXPENSIVE COMPUTE',
   missing_caching:   'MISSING CACHING',
   log_amplification: 'LOG AMPLIFICATION',
+  sql_antipattern:   'SQL ANTIPATTERN',
 };
 
 export const EFFORT_LABEL: Record<Effort, string> = {

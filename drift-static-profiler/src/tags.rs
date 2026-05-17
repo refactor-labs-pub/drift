@@ -79,6 +79,64 @@ fn with_cached_parser<R>(
     })
 }
 
+/// Strip wrapping quotes from a raw tree-sitter string-literal capture
+/// and return the SQL body. Returns `None` when the input doesn't look
+/// like a usable static literal — empty body, f-string with interpolation
+/// (Python `f"..."`, JS template with `${}`), or unbalanced quotes.
+///
+/// We DON'T try to reconstruct interpolated SQL: that's a known false-
+/// positive surface for the SQL linter (see plan §3.4 false-positive
+/// policy — silent-skip when uncertain). Static literals only.
+fn extract_sql_string(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // f-string prefix → interpolated; bail.
+    let bytes = s.as_bytes();
+    if bytes.first().copied() == Some(b'f') || bytes.first().copied() == Some(b'F') {
+        return None;
+    }
+    // JS template literal: backticks. Bail if it contains `${`.
+    if s.starts_with('`') && s.contains("${") {
+        return None;
+    }
+    // Strip Rust raw-string prefix `r#"..."#` / `r"..."` and Python raw
+    // prefix `r"..."`. Conservative — accept up to 8 `#`s for Rust.
+    let mut body = s;
+    if let Some(stripped) = body.strip_prefix('r').or_else(|| body.strip_prefix('R')) {
+        // Could be `r"..."` (Python raw) or `r#"..."#` (Rust raw). Trim
+        // the leading hashes for the Rust form.
+        let hashes_start = stripped.bytes().take_while(|b| *b == b'#').count();
+        if let Some(after_hash) = stripped.get(hashes_start..) {
+            if after_hash.starts_with('"') {
+                body = after_hash;
+            } else {
+                body = stripped;
+            }
+        }
+    }
+    // Strip Python triple-quoted strings first.
+    for triple in ["\"\"\"", "'''"] {
+        if body.starts_with(triple) && body.ends_with(triple) && body.len() >= 6 {
+            return Some(body[3..body.len() - 3].to_string());
+        }
+    }
+    // Single-character delimiters: " ' `
+    let first = body.chars().next()?;
+    let last = body.chars().last()?;
+    if (first == '"' || first == '\'' || first == '`') && first == last && body.len() >= 2 {
+        let inner = &body[first.len_utf8()..body.len() - last.len_utf8()];
+        // Trim any trailing `#`s left over from Rust raw-string suffix.
+        let inner = inner.trim_end_matches('#');
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    None
+}
+
 pub fn extract_tags(path: &Path, lang: Language) -> Result<FileTags> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
@@ -162,6 +220,14 @@ fn extract_tags_inner(
 
     let capture_names = query.capture_names();
     let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+    // Dedup map: byte-offset of @ref.call → index in `references`. Lets a
+    // later SQL-sink match (which fires for the same call site as the
+    // generic call pattern) UPGRADE the existing Reference in place with
+    // its captured SQL text, instead of pushing a duplicate row that the
+    // graph builder would discard. O(1) lookup vs an O(n²) linear scan
+    // on big files.
+    let mut ref_byte_to_idx: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     while let Some(m) = matches.next() {
         let mut def_name: Option<&str> = None;
         let mut def_node: Option<Node> = None;
@@ -169,6 +235,7 @@ fn extract_tags_inner(
         let mut ref_name: Option<&str> = None;
         let mut ref_receiver: Option<String> = None;
         let mut ref_byte: Option<(usize, usize)> = None;
+        let mut ref_sql_literal: Option<&str> = None;
         let mut import_module: Option<&str> = None;
         let mut import_name: Option<&str> = None;
         let mut import_alias: Option<&str> = None;
@@ -197,6 +264,7 @@ fn extract_tags_inner(
                 "ref.call" => {
                     ref_byte = Some((node.start_byte(), node.start_position().row + 1));
                 }
+                "ref.sql_literal" => ref_sql_literal = Some(text),
                 "import.module" => {
                     import_module = Some(text);
                     import_line = node.start_position().row + 1;
@@ -237,14 +305,28 @@ fn extract_tags_inner(
             });
         }
         if let (Some(name), Some((byte, line))) = (ref_name, ref_byte) {
-            references.push(Reference {
-                name: name.to_string(),
-                receiver: ref_receiver.map(|r| rightmost_id(&r).to_string()),
-                file: path.to_path_buf(),
-                line,
-                byte_offset: byte,
-                in_symbol: None,
-            });
+            let sql = ref_sql_literal.and_then(|s| extract_sql_string(s));
+            // Dedup: a single call site may match BOTH the generic call
+            // pattern (which doesn't capture SQL) and a SQL-sink pattern
+            // (which does). Both produce a Reference at the same byte
+            // offset. Merge: keep the first one, upgrade its sql_literal
+            // when a later match brings it.
+            if let Some(&idx) = ref_byte_to_idx.get(&byte) {
+                if sql.is_some() && references[idx].sql_literal.is_none() {
+                    references[idx].sql_literal = sql;
+                }
+            } else {
+                ref_byte_to_idx.insert(byte, references.len());
+                references.push(Reference {
+                    name: name.to_string(),
+                    receiver: ref_receiver.map(|r| rightmost_id(&r).to_string()),
+                    file: path.to_path_buf(),
+                    line,
+                    byte_offset: byte,
+                    in_symbol: None,
+                    sql_literal: sql,
+                });
+            }
         }
         if let Some(module) = import_module {
             // Go's tree-sitter grammar models import paths as

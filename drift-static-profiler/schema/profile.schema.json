@@ -144,6 +144,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/EntryDecl" },
           "description": "Declared entry points harvested from both container-deployment files (Dockerfile, docker-compose) and per-language package manifests (package.json scripts/bin/main, deno.json tasks, pyproject.toml `[project.scripts]`, Cargo.toml `[[bin]]`). Each entry is optionally linked back to the in-graph symbol it most likely launches. See `EntryKind` for the closed-set of source flavors."
+        },
+        "sql_files_scanned": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Count of `.sql` files drift parsed in this run. `null` when the pass was disabled (`--no-sql-files`); `0` means scanned, none could be parsed. The matching synthetic `CallTreeNode`s appear in `entries[]` carrying `entry_labels: [\"sql:file\"]`."
+        },
+        "sql_files_with_findings": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Count of `.sql` files that produced at least one finding. Pair with `sql_files_scanned` for the trust-contract line 'scanned N, M had problems'."
         }
       }
     },
@@ -370,6 +380,10 @@
         "in_await": {
           "type": "boolean",
           "description": "True if the call site is inside an await_expression."
+        },
+        "sql_literal": {
+          "type": ["string", "null"],
+          "description": "Captured SQL text for known SQL-sink calls (e.g. `cursor.execute(...)`, `sqlx::query!(...)`). Optional; absent for non-SQL calls. Consumed by the SQL Query Analyzer (sql_lint.rs)."
         }
       }
     },
@@ -441,7 +455,9 @@
         "hot_zone",
         "expensive_compute",
         "missing_caching",
-        "log_amplification"
+        "log_amplification",
+        "sql_antipattern",
+        "migration_safety"
       ],
       "description": "Closed-set finding kind. New kinds are additive; viewers ignore unknown values."
     },
