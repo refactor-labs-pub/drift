@@ -36,6 +36,16 @@ fn is_prisma_chain(chain: &CallChain, ctx: &PyOrmContext<'_>) -> bool {
     if matches!(root_text.as_str(), "prisma" | "db" | "client") {
         return true;
     }
+    // Receiver pattern: `this.prisma.user.findMany()` arrives as root=`this`
+    // with first step = the client field. Without this branch every class-field
+    // wrapper around the Prisma client is silently skipped.
+    if matches!(root_text.as_str(), "this" | "self") {
+        if let Some(first) = chain.steps.first() {
+            if matches!(first.method.as_str(), "prisma" | "db" | "client") {
+                return true;
+            }
+        }
+    }
     if let Some(b) = ctx.binding_at(&root_text, chain.byte_range.start) {
         if let BindingKind::TsClient(facts) = &b.kind {
             return matches!(facts.kind, TsClientKind::Prisma);
@@ -479,5 +489,16 @@ mod tests {
         let src = "const u = await repo.findOne({ where: { id: 1 } });\n";
         let (c, _t) = ctx(src);
         assert!(!matches_by_shape(&c.chains, &PRISMA_SHAPE));
+    }
+
+    // Regression: `this.prisma.user.findMany()` is the class-field shape
+    // every NestJS / repository codebase uses. Tree-sitter splits the
+    // receiver into root=`this` + first step=`prisma`; before the fix the
+    // chain gate rejected it and PRI-INC-001 silently skipped these chains.
+    #[test]
+    fn is_prisma_chain_accepts_this_prisma() {
+        let src = "class UserService { async list() { return this.prisma.user.findMany({ include: { posts: { include: { comments: { include: { author: true } } } } } }); } }\n";
+        let hits = run_rule("PRI-INC-001", src);
+        assert!(!hits.is_empty(), "this.prisma.user.findMany must trigger PRI-INC-001");
     }
 }

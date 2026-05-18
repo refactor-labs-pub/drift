@@ -32,11 +32,27 @@ fn is_drizzle_chain(chain: &CallChain, ctx: &PyOrmContext<'_>) -> bool {
         ChainRoot::Identifier(t) | ChainRoot::Binding(t) | ChainRoot::LoopVar(t) => t.clone(),
         _ => return false,
     };
-    if root_text == "db" || root_text == "drizzle" {
-        let methods: Vec<&str> = chain.steps.iter().map(|s| s.method.as_str()).collect();
-        return methods
-            .iter()
-            .any(|m| matches!(*m, "select" | "insert" | "update" | "delete"));
+    let methods: Vec<&str> = chain.steps.iter().map(|s| s.method.as_str()).collect();
+    let has_query_op = methods
+        .iter()
+        .any(|m| matches!(*m, "select" | "insert" | "update" | "delete"));
+
+    // Direct identifier root: `db.select()…`, `drizzle.select()…`,
+    // `tx.select()…` (transaction callback param from `db.transaction(tx => …)`).
+    if has_query_op && matches!(root_text.as_str(), "db" | "drizzle" | "tx") {
+        return true;
+    }
+    // Receiver pattern: tree-sitter gives `this.db.select()` as
+    // root=`this` with first step `db`. This is the canonical class-field
+    // shape used by every Drizzle-in-a-class codebase (Supabase RLS
+    // wrappers, repository classes, etc.). Without this branch the
+    // detector silently skips every `this.db.<op>` chain.
+    if has_query_op && matches!(root_text.as_str(), "this" | "self") {
+        if let Some(first) = methods.first() {
+            if matches!(*first, "db" | "drizzle" | "client" | "rlsBase" | "admin") {
+                return true;
+            }
+        }
     }
     if let Some(b) = ctx.binding_at(&root_text, chain.byte_range.start) {
         if let BindingKind::TsClient(facts) = &b.kind {
@@ -367,5 +383,37 @@ mod tests {
         let src = "const x = select(User).where(eq(User.id, 1));\n";
         let (c, _t) = ctx(src);
         assert!(!matches_by_shape(&c.chains, &DRIZZLE_SHAPE));
+    }
+
+    // ─── Receiver pattern (this.db / this.drizzle) ────────────────────────
+    //
+    // Regression tests for the class-field shape every real-world Drizzle
+    // codebase uses (Supabase RLS wrappers, repository classes, etc.).
+    // Without `is_drizzle_chain` accepting root=`this` + first-step=`db`
+    // these chains were silently skipped — verified on a 110-file Drizzle
+    // project: zero ORM findings before the fix.
+
+    #[test]
+    fn drz_lmt_001_fires_on_this_db_limit_without_order() {
+        let src = "class Store { db: any; async f() { return this.db.select().from(users).limit(10); } }\n";
+        let hits = run_rule("DRZ-LMT-001", src);
+        assert_eq!(hits.len(), 1, "this.db.select().limit(10) must trigger DRZ-LMT-001");
+    }
+
+    #[test]
+    fn drz_n1_002_fires_on_this_db_in_loop() {
+        let src = "class Store { db: any; async f(ids: number[]) { for (const id of ids) { await this.db.select().from(users).where(eq(users.id, id)); } } }\n";
+        let hits = run_rule("DRZ-N1-002", src);
+        assert!(!hits.is_empty(), "this.db.select().where(...) in loop must trigger DRZ-N1-002");
+    }
+
+    #[test]
+    fn predict_all_emits_for_this_db_chain() {
+        // `predict_all` shares the same gate, so an unbounded `this.db.select().from(t)`
+        // must reach SQL-IR (SQLIR-012 lives in the cross-ORM catalog and gates on this).
+        let src = "class Store { db: any; async getAll() { return this.db.select().from(appSettings); } }\n";
+        let (c, _t) = ctx(src);
+        let preds = DrizzleDialect.predict_all(&c);
+        assert_eq!(preds.len(), 1, "this.db.select().from(t) must produce one PredictedSql");
     }
 }

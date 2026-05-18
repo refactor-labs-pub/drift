@@ -35,8 +35,24 @@ fn root_text(chain: &CallChain) -> String {
 
 fn is_db_chain(chain: &CallChain) -> bool {
     let r = root_text(chain);
-    let bare = r.trim_start_matches("h.").trim_start_matches("s.");
-    bare == "db" || bare == "DB" || bare == "tx" || bare.ends_with("DB")
+    // Direct identifier: `db.First(…)`, `tx.Find(…)`, `myDB.Where(…)`.
+    if r == "db" || r == "DB" || r == "tx" || r.ends_with("DB") {
+        return true;
+    }
+    // Receiver pattern: `r.db.First(…)` / `s.DB.Find(…)` /
+    // `h.db.Where(…)`. Tree-sitter gives root=`r` with first step =
+    // `db`. This is the canonical "repository / service with a *gorm.DB
+    // field" shape used by virtually every real-world Go project; the
+    // old `trim_start_matches("h.")` heuristic never matched it because
+    // selector_expression splits the receiver and field into separate
+    // chain steps.
+    if let Some(first) = chain.steps.first() {
+        let f = first.method.as_str();
+        if f == "db" || f == "DB" || f == "tx" || f.ends_with("DB") {
+            return true;
+        }
+    }
+    false
 }
 
 fn matches_gorm_n1_001(ctx: &PyOrmContext<'_>) -> Vec<MatchHit> {
@@ -375,5 +391,34 @@ mod tests {
         let src = "package main\nfunc f(db *Gorm) { var u User; db.Create(&u) }\n";
         let hits = run_rule("GORM-SAVE-004", src);
         assert!(hits.is_empty(), "GORM-SAVE-004 must not fire on a single Create call");
+    }
+
+    // ─── Receiver pattern (r.db / s.DB / repo.db) ────────────────────────
+    //
+    // Regression: the canonical "repository struct with a *gorm.DB field"
+    // shape every real-world Go project uses. Tree-sitter renders
+    // `r.db.First(&u, id)` as root=`r` with first step `db`. The old
+    // `trim_start_matches("h.")` heuristic never matched it because the
+    // selector splits the receiver and field into separate chain steps.
+
+    #[test]
+    fn gorm_n1_001_fires_on_receiver_db_in_loop() {
+        let src = "package main\nfunc (r *UserRepo) Load(ids []int64) {\nfor _, id := range ids {\n  var u User\n  r.db.First(&u, id)\n}\n}\n";
+        let hits = run_rule("GORM-N1-001", src);
+        assert!(!hits.is_empty(), "r.db.First in a loop must trigger GORM-N1-001");
+    }
+
+    #[test]
+    fn gorm_save_004_fires_on_receiver_db_create_in_loop() {
+        let src = "package main\nfunc (s *Service) Bulk(us []User) {\nfor _, u := range us {\n  s.db.Create(&u)\n}\n}\n";
+        let hits = run_rule("GORM-SAVE-004", src);
+        assert!(!hits.is_empty(), "s.db.Create in a loop must trigger GORM-SAVE-004");
+    }
+
+    #[test]
+    fn gorm_auto_003_fires_on_receiver_db_automigrate() {
+        let src = "package main\nfunc (a *App) Init() { a.DB.AutoMigrate(&User{}) }\n";
+        let hits = run_rule("GORM-AUTO-003", src);
+        assert!(!hits.is_empty(), "a.DB.AutoMigrate must trigger GORM-AUTO-003");
     }
 }
