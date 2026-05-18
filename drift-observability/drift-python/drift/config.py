@@ -13,6 +13,8 @@ Schema::
       caller: true       # caller's file + line (added as `file`, `line`)
       args_bytes: true   # shallow memory footprint of input args (bytes)
       cpu: true          # 1-minute system load average (cached 1s)
+      memory: true       # process RSS bytes at event time (cached 1s)
+      rss: true          # process resident set size in bytes, at start+end (cached 1s)
 
     # Auto-wrap every function/method defined in the listed modules. Wrapped
     # methods record call/return events with `params: {}`. Entries explicitly
@@ -22,14 +24,27 @@ Schema::
 
     # Optional: ship the local `log_path` to S3 at end-of-run (atexit) or on
     # SIGINT/SIGTERM. Backends are probed in order: boto3 → requests → urllib
-    # (stdlib), so no new dependency is added. Credentials fall back to
-    # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars.
+    # (stdlib), so no new dependency is added.
+    #
+    # `bucket` is the only required field — everything else (region,
+    # endpoint, addressing style, SSE, storage class, ACL, credentials)
+    # falls through the standard AWS env-var chain at upload time, and
+    # the boto3 path additionally honors AWS_PROFILE, ~/.aws/credentials,
+    # and IAM instance/task roles. `DRIFT_S3_BUCKET` and `DRIFT_S3_PREFIX`
+    # env vars can replace the YAML block entirely so observability can be
+    # enabled on a deployment without editing config.
     s3:
-      bucket: my-bucket             # required when `s3` is set
+      bucket: my-bucket             # required (or DRIFT_S3_BUCKET env)
       prefix: drift                 # optional object-key prefix
-      region: us-east-1             # default
-      access_key_id: AKIA...        # optional, falls back to env
-      secret_access_key: ...        # optional, falls back to env
+      # region: us-east-1           # optional — AWS_REGION / AWS_DEFAULT_REGION
+      # endpoint_url: https://...   # optional — for MinIO / R2 / S3-compat
+      # profile: prod               # optional — boto3 named profile
+      # addressing_style: virtual   # "virtual" (AWS default) or "path"
+      # sse: AES256                 # "AES256" or "aws:kms"
+      # sse_kms_key_id: arn:aws:... # required when sse=aws:kms
+      # storage_class: STANDARD_IA  # STANDARD | STANDARD_IA | GLACIER | ...
+      # acl: bucket-owner-full-control
+      # content_type: application/x-ndjson
 
     methods:
       - orders.OrderService.create
@@ -71,12 +86,20 @@ class Include:
     `cpu=True` adds the system's 1-minute load average (`load` field) to each
     event. The value is cached for 1 second so high-frequency calls share a
     single syscall. Falls back to 0.0 on platforms without `os.getloadavg`.
+
+    `rss=True` adds the process's resident set size (`rss` field, bytes) to
+    every start AND end event. Sampled with the same 1-second TTL cache as
+    `load` — Linux reads `/proc/self/statm`, macOS reads
+    `resource.getrusage().ru_maxrss`. Falls back to 0 on platforms without
+    either (Windows). The start/end pair makes the per-call memory delta
+    visible for long-running calls without paying a per-call syscall.
     """
     pod: bool = True
     service: bool = True
     caller: bool = True
     args_bytes: bool = True
     cpu: bool = True
+    rss: bool = True
 
 
 @dataclass(frozen=True)
@@ -106,18 +129,42 @@ class Method:
 class S3Config:
     """End-of-run S3 upload target.
 
-    `bucket` is the only required field. Credentials fall back to the
-    standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
-    env vars so the YAML stays committable.
+    `bucket` is the only required field — every other value resolves through
+    the standard AWS environment-variable chain at upload time (see
+    `drift.s3_upload._resolve_settings`):
+
+        region:           AWS_REGION → AWS_DEFAULT_REGION → "us-east-1"
+        endpoint_url:     AWS_ENDPOINT_URL_S3 → AWS_ENDPOINT_URL → (default AWS)
+        addressing_style: AWS_S3_ADDRESSING_STYLE → "virtual" (AWS) / "path" (custom)
+        credentials:      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
+                          (boto3 path additionally honors AWS_PROFILE,
+                           ~/.aws/credentials, IAM instance/task roles)
+        sse:              AWS_S3_SSE              ("AES256" | "aws:kms")
+        sse_kms_key_id:   AWS_S3_SSE_KMS_KEY_ID
+        storage_class:    AWS_S3_STORAGE_CLASS    (STANDARD | STANDARD_IA | …)
+        acl:              AWS_S3_ACL              (private | bucket-owner-full-control | …)
+        content_type:     AWS_S3_CONTENT_TYPE     (default "application/x-ndjson")
+
+    Any field set explicitly in YAML wins over the env. `bucket` and `prefix`
+    can also be set via `DRIFT_S3_BUCKET` / `DRIFT_S3_PREFIX` so observability
+    can be toggled on a deployment without editing the config file.
 
     The final object key is `{prefix}/{service}/{YYYY-MM-DD}/{HHMMSS}-{host}-{pid}.log`.
     """
     bucket: str
     prefix: str = ""
-    region: str = DEFAULT_S3_REGION
+    region: Optional[str] = None
+    endpoint_url: Optional[str] = None
+    profile: Optional[str] = None
     access_key_id: Optional[str] = None
     secret_access_key: Optional[str] = None
     session_token: Optional[str] = None
+    addressing_style: Optional[str] = None   # "virtual" | "path"
+    sse: Optional[str] = None                # "AES256" | "aws:kms"
+    sse_kms_key_id: Optional[str] = None
+    storage_class: Optional[str] = None      # STANDARD | STANDARD_IA | GLACIER | …
+    acl: Optional[str] = None                # private | bucket-owner-full-control | …
+    content_type: Optional[str] = None       # default "application/x-ndjson"
 
 
 @dataclass
@@ -170,6 +217,7 @@ def _parse_include(raw: object) -> Include:
         caller=bool(raw.get("caller", True)),
         args_bytes=bool(raw.get("args_bytes", True)),
         cpu=bool(raw.get("cpu", True)),
+        rss=bool(raw.get("rss", True)),
     )
 
 
@@ -185,17 +233,36 @@ def _parse_call_graph(raw: object) -> CallGraph:
 
 
 def _parse_s3(raw: object) -> Optional[S3Config]:
+    """Parse the `s3:` YAML block, OR build one from env vars when the YAML
+    omits it.
+
+    Setting `DRIFT_S3_BUCKET` (and optionally `DRIFT_S3_PREFIX`) is enough to
+    turn on uploads in production without re-shipping config. Everything
+    else (region, endpoint, credentials) is resolved at upload time through
+    the standard AWS env-var chain — see `S3Config` docstring.
+    """
     if raw is None:
-        return None
+        bucket = os.environ.get("DRIFT_S3_BUCKET")
+        if not bucket:
+            return None
+        return S3Config(
+            bucket=bucket,
+            prefix=os.environ.get("DRIFT_S3_PREFIX", ""),
+        )
     if not isinstance(raw, dict):
         raise ValueError("drift config: 's3' must be a mapping")
-    bucket = raw.get("bucket")
+    bucket = raw.get("bucket") or os.environ.get("DRIFT_S3_BUCKET")
     if not bucket:
-        raise ValueError("drift config: 's3.bucket' is required when 's3' is set")
+        raise ValueError(
+            "drift config: 's3.bucket' is required when 's3' is set "
+            "(or set DRIFT_S3_BUCKET in env)"
+        )
     return S3Config(
         bucket=str(bucket),
-        prefix=str(raw.get("prefix") or ""),
-        region=str(raw.get("region") or DEFAULT_S3_REGION),
+        prefix=str(raw.get("prefix") or os.environ.get("DRIFT_S3_PREFIX") or ""),
+        region=_opt_str(raw.get("region")),
+        endpoint_url=_opt_str(raw.get("endpoint_url")),
+        profile=_opt_str(raw.get("profile")),
         access_key_id=_opt_str(raw.get("access_key_id")),
         secret_access_key=_opt_str(raw.get("secret_access_key")),
         session_token=_opt_str(raw.get("session_token")),
