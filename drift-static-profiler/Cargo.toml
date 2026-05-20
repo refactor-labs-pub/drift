@@ -3,7 +3,7 @@ name = "drift-static-profiler"
 version = "0.6.0"
 edition = "2021"
 description = "Language-agnostic static call-tree analyzer for drift-lab"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "drift-static-profiler"

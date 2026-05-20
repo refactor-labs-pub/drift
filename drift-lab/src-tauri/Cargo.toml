@@ -2,8 +2,8 @@
 name = "drift-lab"
 version = "0.1.0"
 description = "Drift Lab — desktop app for profiling Dockerized services"
-authors = ["refactor-labs"]
-license = "MIT"
+authors = ["Refactorlabs"]
+license = "Apache-2.0"
 repository = "https://github.com/refactorlab/drift"
 edition = "2021"
 rust-version = "1.89"

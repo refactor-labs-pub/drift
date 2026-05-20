@@ -1,0 +1,32 @@
+version = 1
+
+# REUSE 3.3 configuration for the Drift monorepo.
+# Drift is licensed under Apache-2.0; this file marks the sub-trees
+# that carry different upstream licenses so that compliance scanners
+# (FOSSA, Black Duck, Snyk, REUSE, cargo-about) classify every file
+# correctly without per-file SPDX headers.
+#
+# See: https://reuse.software/spec-3.3/
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 The Drift Authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Fork of Google's Cloud Profiler agent. Upstream Apache-2.0 grant
+# continues; Refactorlabs modifications are also Apache-2.0 per § 5
+# of the Apache License.
+[[annotations]]
+path = "drift-observability/drift-profiler-python/**"
+precedence = "override"
+SPDX-FileCopyrightText = ["Google LLC", "2026 The Drift Authors"]
+SPDX-License-Identifier = "Apache-2.0"
+
+# Independent MIT-licensed project by Richard Peña, vendored for
+# research and integration evaluation. Author retains copyright.
+[[annotations]]
+path = "drift-static-profiler/research/django-check/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2024-2026 Richard Peña <richard.penab@gmail.com>"
+SPDX-License-Identifier = "MIT"

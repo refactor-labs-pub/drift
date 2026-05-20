@@ -8,7 +8,7 @@ Open-source performance & FinOps platform: static call-graph analysis +
 runtime profiling + per-PR verdicts. One monorepo, five composable surfaces,
 zero vendor lock-in.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![drift-lab](https://img.shields.io/github/v/release/refactorlab/drift?filter=drift-lab-v*&label=drift-lab&color=ff6b3d)](https://github.com/refactorlab/drift/releases?q=drift-lab)
 [![PyPI](https://img.shields.io/pypi/v/drift-docker-profiler.svg?label=drift-docker-profiler)](https://pypi.org/project/drift-docker-profiler/)
 
@@ -219,9 +219,12 @@ hit the **Generate fix PR** button.
 | Multi-team org | Install the GitHub App org-wide; deploy `drift-observability` next to your services for production traces; self-host `web-app` for dashboards. |
 | Regulated / air-gapped | Run everything locally: static profiler in CI, Python profiler with `JsonlFileSink`, web-app + Postgres on internal infra. Nothing leaves your VPC. |
 
-Every package is **MIT-licensed open source** (the Python profiler is
-Apache-2.0 to match upstream). There is no "community vs. enterprise"
-edition — the cloud product is convenience, not capability.
+Every first-party package is **open source under Apache License 2.0**
+— free for internal use, production, research, modification, and
+redistribution, including in commercial offerings. Each package's
+LICENSE file (or this repository's root [LICENSE](LICENSE)) carries the
+full text. Third-party attribution required by Apache 2.0 §4 lives in
+the root [NOTICE](NOTICE) file.
 
 ### Cost & overhead, by surface
 
@@ -273,7 +276,8 @@ in any of them lists the targets.
 ```
 drift/
 ├── README.md                  ← you are here
-├── LICENSE                    MIT
+├── LICENSE                    Apache License 2.0
+├── NOTICE                     third-party attribution (Apache §4(d))
 ├── Makefile                   top-level convenience targets
 ├── docker-compose.yml         web-app + Postgres + pgAdmin
 │
@@ -329,9 +333,15 @@ drift/
 
 ## License
 
-- **MIT** for the monorepo (see [LICENSE](LICENSE)).
-- **Apache-2.0** for `drift-profiler-python` to match its upstream
-  (Google Cloud Profiler).
+- **Apache License 2.0** for the monorepo — see [LICENSE](LICENSE).
+  Open source: free to use, modify, redistribute, and use commercially.
+  Third-party attribution required by Apache 2.0 §4(d) is in
+  [NOTICE](NOTICE).
+- **MIT** for `drift-static-profiler/research/django-check/` (separate
+  upstream project by Richard Peña — see that subdirectory's LICENSE).
+- `drift-observability/drift-profiler-python/` is a fork of Google's
+  Apache-2.0 Cloud Profiler agent and remains Apache-2.0; its upstream
+  LICENSE is preserved in that subdirectory.
 
 You can self-host any combination of these components — no telemetry,
 no API key required for the open-source paths.

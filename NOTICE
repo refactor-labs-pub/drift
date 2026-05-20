@@ -1,0 +1,54 @@
+Drift
+Copyright 2026 The Drift Authors
+
+This product includes software developed at Refactorlabs
+(https://github.com/refactorlab).
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may
+not use this file except in compliance with the License. You may obtain a
+copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================
+Third-party software included in this distribution
+================================================================
+
+The following components are bundled in this repository under licenses
+distinct from the Apache License 2.0 that covers Drift itself. Their
+original copyright and license notices are preserved in their respective
+source directories.
+
+----------------------------------------------------------------
+drift-profiler-python
+----------------------------------------------------------------
+
+Location:     drift-observability/drift-profiler-python/
+License:      Apache License, Version 2.0
+License file: drift-observability/drift-profiler-python/LICENSE
+Origin:       Fork of the Google Cloud Profiler agent for Python,
+              originally developed by Google LLC.
+
+Original copyright notice retained:
+    Copyright 2018 Google LLC
+
+----------------------------------------------------------------
+django-check
+----------------------------------------------------------------
+
+Location:     drift-static-profiler/research/django-check/
+License:      MIT License
+License file: drift-static-profiler/research/django-check/LICENSE
+Origin:       Independent project authored by Richard Peña,
+              vendored for research and integration evaluation.
+
+Original copyright notice retained:
+    Copyright (c) 2024-2026 Richard Peña <richard.penab@gmail.com>
+
+================================================================
+Trademarks
+================================================================
+
+"Drift", "Drift Lab", "Refactorlabs" and any associated logos are
+trademarks of Refactorlabs. The Apache License 2.0 does not grant
+permission to use these trademarks; see Section 6 of the LICENSE.
