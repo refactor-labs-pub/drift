@@ -1,15 +1,24 @@
 name: drift-lab desktop / build
 
-# PR-only validation that the desktop app compiles and bundles successfully on
-# every supported platform. Uploads a single staged artifact per platform —
-# mirroring `make drift-lab-export`'s output (every shippable artifact + a
-# SHA256SUMS manifest) — so a PR reviewer can grab one zip and verify the
-# whole release surface. No GitHub Release is created here; that happens
-# automatically on every push to main via ci.yml / drift-lab-desktop-release.yml.
+# Owns the full drift-lab desktop CI pipeline — build, sign, and publish.
 #
-# The artifact-collection logic lives in drift-lab/scripts/ci/ and is
-# unit-tested by `make drift-lab-ci-preflight`. If you change the glob list
-# or layout, change it there and the tests will tell you what broke.
+# Triggers:
+#   • push to main (paths-filtered to drift-lab/ + drift-static-profiler/ + this
+#     workflow file): runs bump → build → publish. Auto-tags the next
+#     drift-lab-v* version based on conventional commits and creates a GitHub
+#     Release with bundles + latest.json updater manifest.
+#   • workflow_dispatch from the Actions tab: build-only validation, no
+#     bump and no release created. Use this to verify a PR's bundle on
+#     demand (Actions → drift-lab desktop / build → Run workflow → branch).
+#   • PRs do NOT auto-trigger — too expensive for routine code changes.
+#
+# Output layout per build matrix leg: a single staged artifact mirroring
+# `make drift-lab-export`'s flat directory (every shippable artifact + a
+# SHA256SUMS manifest). The artifact-collection logic lives in
+# drift-lab/scripts/ci/ and is unit-tested by `make drift-lab-ci-preflight`.
+#
+# This workflow replaces the old drift-lab-bump / drift-lab-build /
+# drift-lab-publish jobs in ci.yml — single source of truth for desktop CI.
 #
 # ── Caching strategy ────────────────────────────────────────────────────────
 # Five cache layers, all keyed so they self-invalidate on input change:
@@ -18,7 +27,7 @@ name: drift-lab desktop / build
 #                                  package-lock.json paths
 #   3. static-profiler viewer dist — actions/cache@v4 keyed on viewer sources
 #   4. Rust target/ + ~/.cargo   — Swatinem/rust-cache@v2 with shared-key
-#                                  (cross-workflow reuse with release + ci.yml)
+#                                  (cross-workflow reuse with release.yml)
 #   5. cargo-tauri binary        — taiki-e/install-action pulls a pre-built
 #                                  binary from GitHub Releases (~10s) instead
 #                                  of `cargo install` compiling from source
@@ -26,20 +35,23 @@ name: drift-lab desktop / build
 #                                  for reproducibility.
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'drift-lab/**'
       # drift-lab links against drift-static-profiler as a path dependency
       # (see drift-lab/src-tauri/Cargo.toml). A change in the profiler
-      # crate must trigger the desktop build so we catch breakage at PR
-      # time, not the next time someone touches drift-lab/.
+      # crate must trigger the desktop build so we catch breakage on the
+      # main-branch build, not the next time someone touches drift-lab/.
       - 'drift-static-profiler/**'
       - '.github/workflows/drift-lab-desktop-build.yml'
   workflow_dispatch:
 
+# Serialize main-branch runs so back-to-back pushes can't race on git tag
+# creation. PR-side dispatches run in parallel (different refs).
 concurrency:
   group: drift-lab-desktop-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Cheap pre-flight: run the CI helper-script self-tests on a fast Linux
@@ -63,9 +75,98 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
+  # Compute the next drift-lab-v* tag based on conventional commits since
+  # the previous tag. Only runs on push to main — workflow_dispatch builds
+  # are validation-only and don't publish a release.
+  bump:
+    name: bump / compute next version
+    if: github.event_name == 'push'
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip:    ${{ steps.bump.outputs.skip }}
+      tag:     ${{ steps.bump.outputs.tag }}
+      prev:    ${{ steps.bump.outputs.prev }}
+      version: ${{ steps.bump.outputs.version }}
+      bump:    ${{ steps.bump.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next drift-lab version
+        id: bump
+        run: |
+          set -euo pipefail
+
+          last_tag=$(git tag --list 'drift-lab-v*.*.*' --sort=-v:refname | head -n 1 || true)
+          if [ -z "$last_tag" ]; then
+            range="HEAD"
+            prev="drift-lab-v0.0.0"
+          else
+            range="${last_tag}..HEAD"
+            prev="$last_tag"
+          fi
+
+          # Commits that touched drift-lab/ OR drift-static-profiler/ (the
+          # path-dependency the desktop app links against) OR this workflow
+          # file count for a release. CI fixes need to ship a release too,
+          # otherwise the "fix" is invisible until the next code change.
+          relevant=$(git log "$range" --no-merges --pretty=format:'%H' -- \
+            drift-lab/ \
+            drift-static-profiler/ \
+            .github/workflows/drift-lab-desktop-build.yml \
+            || true)
+          if [ -z "$relevant" ]; then
+            echo "No drift-lab-relevant commits since $prev — skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Conventional-commit bump:
+          #   BREAKING CHANGE / feat!: / fix!: → major
+          #   feat: → minor
+          #   anything else → patch
+          bump="patch"
+          while IFS= read -r sha; do
+            msg=$(git log -1 --format='%s%n%b' "$sha")
+            if echo "$msg" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.*\))?!:'; then
+              bump="major"; break
+            elif echo "$msg" | grep -qE '^feat(\(.*\))?:'; then
+              [ "$bump" = "patch" ] && bump="minor"
+            fi
+          done <<< "$relevant"
+
+          ver="${prev#drift-lab-v}"
+          IFS='.' read -r major minor patch <<< "$ver"
+          case "$bump" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            patch) patch=$((patch+1)) ;;
+          esac
+          new_version="${major}.${minor}.${patch}"
+          new_tag="drift-lab-v${new_version}"
+
+          {
+            echo "skip=false"
+            echo "tag=$new_tag"
+            echo "prev=$prev"
+            echo "version=$new_version"
+            echo "bump=$bump"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Releasing $new_tag (bump=$bump, prev=$prev)"
+
   build:
     name: build / ${{ matrix.label }}
-    needs: preflight
+    needs: [preflight, bump]
+    # Run build on workflow_dispatch always (validation), and on push only
+    # when bump found relevant commits. `always()` overrides the default
+    # skip-cascade so dispatch isn't blocked by bump's `skip` status.
+    if: |
+      always() && needs.preflight.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.bump.outputs.skip != 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -129,10 +230,9 @@ jobs:
 
       # ── Cache layer 4: Rust target/ + ~/.cargo ────────────────────────
       # `shared-key:` (not `key:`) means this slot is reusable across
-      # workflows — drift-lab-desktop-build, drift-lab-desktop-release,
-      # and ci.yml's drift-lab-build can all warm each other's caches.
-      # rust-cache validates contents on restore so a poisoned slot just
-      # falls back to a cold build.
+      # workflows — drift-lab-desktop-build and drift-lab-desktop-release
+      # can warm each other's caches. rust-cache validates contents on
+      # restore so a poisoned slot just falls back to a cold build.
       - name: Cache Rust target/
         uses: Swatinem/rust-cache@v2
         with:
@@ -245,3 +345,198 @@ jobs:
           path: staging/
           if-no-files-found: error
           retention-days: 7
+
+  # Publish — main-branch only. Downloads every matrix artifact, builds the
+  # latest.json updater manifest, tags the new drift-lab-v* version, and
+  # creates a GitHub Release with all bundles + sigs attached. Idempotent
+  # via gh release view + --clobber.
+  publish:
+    name: publish ${{ needs.bump.outputs.tag }}
+    needs: [bump, build]
+    if: github.event_name == 'push' && needs.bump.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install jq
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: jq
+          version: 1.0
+
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: drift-lab-v*
+          merge-multiple: true
+          path: dist
+
+      - name: List downloaded assets (pre-flatten)
+        run: ls -laR dist/
+
+      - name: Flatten artifacts + recompute SHA256SUMS
+        env:
+          NEW_TAG: ${{ needs.bump.outputs.tag }}
+        run: |
+          # Each matrix leg uploads a flat staging/ dir with its own
+          # SHA256SUMS. download-artifact's merge-multiple puts them all
+          # into dist/ — the per-platform SHA256SUMS files will overwrite
+          # each other. Drop the stale ones and recompute one combined
+          # manifest covering every bundle in the merged dir.
+          find dist -mindepth 2 -type f -exec mv -v {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+          rm -f dist/SHA256SUMS
+          bash drift-lab/scripts/ci/compute-shasums.sh dist >/dev/null
+          echo "Combined manifest:"
+          cat dist/SHA256SUMS
+
+      - name: Build latest.json (updater manifest)
+        env:
+          NEW_TAG: ${{ needs.bump.outputs.tag }}
+          VERSION: ${{ needs.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Tauri's updater on macOS / Linux downloads a tar.gz of the bundle
+          # signed with TAURI_SIGNING_PRIVATE_KEY. The .sig file is the entire
+          # signature payload (single line, base64). We drop a `latest.json`
+          # next to the bundles describing each platform's URL + signature.
+          base="https://github.com/${{ github.repository }}/releases/download/${NEW_TAG}"
+
+          # Helpers — first match for a glob, or empty.
+          first() {
+            find dist -maxdepth 1 -type f -name "$1" -print -quit 2>/dev/null || true
+          }
+          read_sig() { [ -n "$1" ] && [ -f "$1" ] && cat "$1" || true; }
+
+          mac_bundle="$(first '*.app.tar.gz')"
+          mac_sig_file="$(first '*.app.tar.gz.sig')"
+          linux_bundle="$(first '*.AppImage.tar.gz')"
+          linux_sig_file="$(first '*.AppImage.tar.gz.sig')"
+
+          mac_sig="$(read_sig "$mac_sig_file")"
+          linux_sig="$(read_sig "$linux_sig_file")"
+
+          if [ -z "$mac_sig" ] && [ -z "$linux_sig" ]; then
+            echo "::warning::No updater signatures found — skipping latest.json (TAURI_SIGNING_PRIVATE_KEY likely unset). Bundles still ship; auto-update will report 'no update' instead of installing untrusted content."
+            exit 0
+          fi
+
+          notes="See https://github.com/${{ github.repository }}/releases/tag/${NEW_TAG}"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          # Assemble platforms object. Unsigned legs are simply omitted.
+          platforms="{}"
+          if [ -n "$mac_sig" ] && [ -n "$mac_bundle" ]; then
+            url="${base}/$(basename "$mac_bundle")"
+            platforms=$(jq -n --arg sig "$mac_sig" --arg url "$url" \
+              '{"darwin-x86_64": {signature: $sig, url: $url}, "darwin-aarch64": {signature: $sig, url: $url}}')
+          fi
+          if [ -n "$linux_sig" ] && [ -n "$linux_bundle" ]; then
+            url="${base}/$(basename "$linux_bundle")"
+            platforms=$(echo "$platforms" | jq --arg sig "$linux_sig" --arg url "$url" \
+              '. + {"linux-x86_64": {signature: $sig, url: $url}}')
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg pub_date "$pub_date" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > dist/latest.json
+
+          echo "Built latest.json:"
+          cat dist/latest.json
+
+      - name: Generate release notes
+        id: notes
+        env:
+          NEW_TAG: ${{ needs.bump.outputs.tag }}
+          PREV_TAG: ${{ needs.bump.outputs.prev }}
+          BUMP: ${{ needs.bump.outputs.bump }}
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/notes.md"
+
+          if [ "$PREV_TAG" = "drift-lab-v0.0.0" ] || ! git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            range="HEAD"
+            prev_label="(initial release)"
+          else
+            range="${PREV_TAG}..HEAD"
+            prev_label="${PREV_TAG}"
+          fi
+
+          {
+            echo "## Drift Lab $NEW_TAG"
+            echo
+            echo "Built for **macOS** (Apple Silicon + Intel) and **Linux** (x86_64). Bump: \`$BUMP\`."
+            echo
+            echo "### Install"
+            echo "- **macOS arm64** — \`Drift Lab_*_aarch64.dmg\`"
+            echo "- **macOS Intel** — \`Drift Lab_*_x64.dmg\`"
+            echo "- **Debian/Ubuntu** — \`sudo dpkg -i drift-lab_*_amd64.deb\`"
+            echo "- **Other Linux** — \`chmod +x drift-lab_*.AppImage && ./drift-lab_*.AppImage\`"
+            echo
+            echo "### Verifying"
+            echo "Every asset is hashed in \`SHA256SUMS\`. Run \`shasum -a 256 -c SHA256SUMS\` after downloading."
+            echo
+            echo "### Changes since $prev_label"
+            # Include drift-static-profiler commits — the desktop links it as
+            # a path dep, so a profiler change really did ship in this build.
+            git log "$range" --no-merges --pretty='- %s (%h)' \
+              -- drift-lab/ drift-static-profiler/ | head -200
+          } > "$notes_file"
+
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and publish release
+        env:
+          GH_TOKEN:   ${{ github.token }}
+          NEW_TAG:    ${{ needs.bump.outputs.tag }}
+          NOTES_FILE: ${{ steps.notes.outputs.file }}
+        run: |
+          set -euo pipefail
+
+          # Bundles users download manually + the SHA256SUMS manifest + the
+          # updater manifest + the tar.gz updater bundles + their detached
+          # signatures. The plugin fetches `latest.json` first, then the
+          # platform tar.gz it points to. Manual installers stay too.
+          mapfile -t files < <(find dist -maxdepth 1 -type f \
+            \( -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \
+            -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
+            -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
+            -o -name "latest.json" -o -name "SHA256SUMS" \))
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no bundle files found under dist/"
+            ls -laR dist/ || true
+            exit 1
+          fi
+
+          echo "Attaching ${#files[@]} bundle(s) to ${NEW_TAG}:"
+          printf '  %s\n' "${files[@]}"
+
+          # Idempotent tag push — re-runs after a partial failure won't error.
+          if git ls-remote --exit-code --tags origin "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already on origin — skipping tag creation"
+          else
+            git tag "$NEW_TAG"
+            git push origin "$NEW_TAG"
+          fi
+
+          # Idempotent release — reuse and overwrite partial assets via --clobber.
+          if gh release view "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Release $NEW_TAG already exists — refreshing assets"
+            gh release upload "$NEW_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$NEW_TAG" \
+              --title "$NEW_TAG" \
+              --notes-file "$NOTES_FILE" \
+              "${files[@]}"
+          fi

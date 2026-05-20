@@ -40,10 +40,10 @@ on:
     paths:
       - 'drift-observability/drift-profiler-python/**'
       - '.github/workflows/drift-profiler-python-release.yml'
-  pull_request:
-    paths:
-      - 'drift-observability/drift-profiler-python/**'
-      - '.github/workflows/drift-profiler-python-release.yml'
+  # PRs do NOT auto-trigger this workflow. The matrix (Python 3.7 + 3.14
+  # under docker + cibuildwheel × 2 versions + universal wheel + sdist)
+  # is expensive for routine code changes. Use `workflow_dispatch` to
+  # validate a PR's full build on demand from the Actions tab.
   workflow_dispatch:
 
 # Serialize main-branch releases so back-to-back pushes can't race on
