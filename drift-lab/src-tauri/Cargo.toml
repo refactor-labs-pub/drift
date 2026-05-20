@@ -59,7 +59,7 @@ hex = "0.4"
 # HTTP, so a single `rig::providers::openai::Client` handles them all —
 # drift-lab itself runs no inference. Local runtimes (Ollama, LM Studio,
 # Docker Model Runner) are discovered via `model_discovery::probe_local_runtimes`.
-rig-core = "0.35"
+rig-core = "0.37"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 tauri-plugin-store = "2"
 
