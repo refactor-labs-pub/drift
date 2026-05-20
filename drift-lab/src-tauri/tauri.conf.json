@@ -44,7 +44,7 @@
     "longDescription": "Drift Lab attaches a profiler to a running Docker workload, drives load, and ranks performance issues from the resulting flame graph.",
     "copyright": "Copyright © 2026 refactor-labs · MIT licensed",
     "publisher": "refactor-labs",
-    "homepage": "https://github.com/refactor-labs-pub/drift",
+    "homepage": "https://github.com/refactorlab/drift",
     "license": "MIT",
     "macOS": {
       "minimumSystemVersion": "10.15",
@@ -54,7 +54,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json"
+        "https://github.com/refactorlab/drift/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3QTQ2QUNGNDFGN0M5QjUKUldTMXlmZEJ6MnFrUnd0VHN6V2F4Z1NEb2Irdm1USVZ4ckRZWTI4NFZHQVV4K3NaRk9DUEM4NFIK",
       "windows": {

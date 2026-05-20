@@ -183,7 +183,7 @@ jobs:
             See assets below. Auto-update will roll out to existing installs
             within ~60 seconds of clicking *Publish* on this draft.
 
-            Bootstrap docs: [drift-lab/UPDATER.md](https://github.com/refactor-labs-pub/drift/blob/main/drift-lab/UPDATER.md)
+            Bootstrap docs: [drift-lab/UPDATER.md](https://github.com/refactorlab/drift/blob/main/drift-lab/UPDATER.md)
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true

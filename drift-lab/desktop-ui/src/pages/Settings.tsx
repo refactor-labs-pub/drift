@@ -1648,7 +1648,7 @@ function NotConfiguredPanel({ detail }: { detail?: string }) {
         yet, or the <code>pubkey</code> in <code>tauri.conf.json</code> is still
         the placeholder. See{" "}
         <a
-          href="https://github.com/refactor-labs-pub/drift/blob/main/drift-lab/UPDATER.md"
+          href="https://github.com/refactorlab/drift/blob/main/drift-lab/UPDATER.md"
           target="_blank"
           rel="noreferrer"
         >

@@ -2,7 +2,7 @@
 #
 # Drift Lab — macOS one-line installer.
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/refactor-labs-pub/drift/main/drift-lab/scripts/install-macos.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/refactorlab/drift/main/drift-lab/scripts/install-macos.sh | bash
 #
 # What this does:
 #   1. Resolves the latest drift-lab-v* release from GitHub
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-REPO="refactor-labs-pub/drift"
+REPO="refactorlab/drift"
 APP_NAME="Drift Lab"
 TAG_PREFIX="drift-lab-v"
 

@@ -3,7 +3,7 @@
 Desktop app for profiling Dockerized services. Built with **Tauri 2 + React 18
 + TypeScript + Rust**. MIT licensed · open source.
 
-[![Latest release](https://img.shields.io/github/v/release/refactor-labs-pub/drift?filter=drift-lab-v*&label=drift-lab&color=ff6b3d)](https://github.com/refactor-labs-pub/drift/releases?q=drift-lab&expanded=true)
+[![Latest release](https://img.shields.io/github/v/release/refactorlab/drift?filter=drift-lab-v*&label=drift-lab&color=ff6b3d)](https://github.com/refactorlab/drift/releases?q=drift-lab&expanded=true)
 
 ---
 
@@ -36,7 +36,7 @@ Run `make help` for the full target list, grouped by purpose.
 ### Get a pre-built binary
 
 Every push to `main` produces installable bundles attached to a
-[GitHub Release](https://github.com/refactor-labs-pub/drift/releases) under a
+[GitHub Release](https://github.com/refactorlab/drift/releases) under a
 `drift-lab-vX.Y.Z` tag:
 
 | Platform | File |
@@ -48,7 +48,7 @@ Every push to `main` produces installable bundles attached to a
 #### macOS — recommended one-line install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/refactor-labs-pub/drift/main/drift-lab/scripts/install-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/refactorlab/drift/main/drift-lab/scripts/install-macos.sh | bash
 ```
 
 That script downloads the latest `Drift Lab.dmg`, copies the app to
@@ -191,7 +191,7 @@ docker run --rm --platform linux/amd64 \
 
 Drift Lab self-updates from GitHub Releases via the Tauri 2 updater plugin.
 On launch the app silently calls
-`https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json`,
+`https://github.com/refactorlab/drift/releases/latest/download/latest.json`,
 compares versions, and shows an "Update & relaunch" banner when a newer
 `drift-lab-v*` release exists. The same UI is also available in
 **Settings → Updates** with a manual "Check for updates" button.

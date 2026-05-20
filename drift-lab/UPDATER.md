@@ -150,7 +150,7 @@ without a coordinated client migration.
 ### What `latest.json` looks like
 
 After tauri-action runs, the manifest at
-`https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json`
+`https://github.com/refactorlab/drift/releases/latest/download/latest.json`
 should look like:
 
 ```json
@@ -161,7 +161,7 @@ should look like:
   "platforms": {
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IC4uLgo=",
-      "url": "https://github.com/refactor-labs-pub/drift/releases/download/drift-lab-v0.1.1/Drift%20Lab_0.1.1_universal.app.tar.gz"
+      "url": "https://github.com/refactorlab/drift/releases/download/drift-lab-v0.1.1/Drift%20Lab_0.1.1_universal.app.tar.gz"
     },
     "darwin-x86_64":  { "signature": "...", "url": "...(same universal asset)..." },
     "linux-x86_64":   { "signature": "...", "url": "...AppImage.tar.gz" }
@@ -209,4 +209,4 @@ the updater end-to-end:
 | `latest.json` missing `darwin-aarch64` entry on M-series Mac | The post-build mirror step in the release workflow didn't run / didn't find the existing darwin entry — re-run the workflow |
 | Release workflow fails on `tauri-action` step with "private key not found" | Secret `TAURI_SIGNING_PRIVATE_KEY` not set or pasted with leading/trailing whitespace |
 
-[endpoint]: https://github.com/refactor-labs-pub/drift/releases/latest/download/latest.json
+[endpoint]: https://github.com/refactorlab/drift/releases/latest/download/latest.json
