@@ -24,7 +24,7 @@ tauri-plugin-window-state = "2"
 # Async + Docker
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-bollard = "0.17"
+bollard = "0.21"
 futures-util = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
