@@ -43,11 +43,12 @@ _SCHEMA_FILE = os.path.join(_HERE, "event.schema.json")
 
 # Map each `type` discriminator value to the corresponding $defs key.
 _TYPE_TO_DEF = {
-    "wall_trace":    "WallTraceEvent",
-    "cpu_trace":     "CPUTraceEvent",
-    "function_call": "FunctionCallEvent",
-    "wall_profile": "WallProfileEvent",
-    "cpu_profile":  "CPUProfileEvent",
+    "wall_trace":       "WallTraceEvent",
+    "cpu_trace":        "CPUTraceEvent",
+    "function_call":    "FunctionCallEvent",
+    "wall_profile":     "WallProfileEvent",
+    "cpu_profile":      "CPUProfileEvent",
+    "profile_metadata": "ProfileMetadataEvent",
 }
 
 VALID_EVENT_TYPES = frozenset(_TYPE_TO_DEF)
@@ -143,6 +144,13 @@ _PER_TRACE_REQUIRED = ("count", "frames")
 _BUNDLE_REQUIRED = ("profile_type", "time_ns", "sample_type", "samples")
 _FUNCTION_CALL_REQUIRED = ("type", "time", "service", "pod",
                            "qualname", "duration_ns", "status")
+# profile_metadata is the per-run header event the Client emits at
+# startup. It does NOT share EventBase (no period_ns / duration_ns /
+# cpu / memory_bytes) — those only make sense for sampler events.
+# Matches the `required` list in event.schema.json#ProfileMetadataEvent.
+_PROFILE_METADATA_REQUIRED = ("type", "time", "service", "pod",
+                              "mode", "schema_version", "service_id",
+                              "generator")
 
 
 def _builtin_validate(event: Any) -> None:
@@ -163,6 +171,14 @@ def _builtin_validate(event: Any) -> None:
       if k not in event:
         raise ValidationError(
             f"function_call event missing required field: {k!r}")
+    return
+  if t == "profile_metadata":
+    # Per-run header — distinct shape from sampler events (no
+    # period_ns / duration_ns / cpu / memory_bytes).
+    for k in _PROFILE_METADATA_REQUIRED:
+      if k not in event:
+        raise ValidationError(
+            f"profile_metadata event missing required field: {k!r}")
     return
   # Sampler events share EventBase.
   for k in _SAMPLER_BASE_REQUIRED:

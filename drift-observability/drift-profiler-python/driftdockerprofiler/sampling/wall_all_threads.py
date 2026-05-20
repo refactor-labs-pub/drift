@@ -165,9 +165,16 @@ class WallAllThreadsSampler:
         # Without this, downstream consumers (the icicle chart's
         # total-time accounting, especially) would see strategy-
         # dependent totals.
+        #
+        # Frame is 5-tuple `(name, file, line, qualified_name, module)`
+        # per Phase F1b — same shape as the real-frame path in
+        # `_snapshot_frames`. Emitting a 3-tuple here breaks
+        # downstream consumers that unpack positionally (and breaks
+        # the test suite's structural assertion on frame shape).
         expected = max(int(duration_ns / self._period_ns), 1)
         if count < expected:
-            traces[(('unknown', 'unknown', 0),)] = expected - count
+            traces[(('unknown', 'unknown', 0, 'unknown', 'unknown'),)] = (
+                expected - count)
         return traces
 
     def _sample_loop(self):

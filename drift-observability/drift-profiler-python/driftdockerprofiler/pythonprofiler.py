@@ -265,7 +265,11 @@ class WallProfiler:
     period_ns = self._period_ns
     unknown_trace_count = int(duration_ns / period_ns) - self._trace_count
     if unknown_trace_count > 0:
-      self._traces[(('unknown', 'unknown', 0),)] = unknown_trace_count
+      # 5-tuple `(name, file, line, qualified_name, module)` per
+      # Phase F1b — matches the real-frame path so downstream
+      # consumers can always positional-unpack 5 elements.
+      self._traces[(('unknown', 'unknown', 0, 'unknown', 'unknown'),)] = (
+          unknown_trace_count)
     traces = dict(self._traces)
     self._reset()
     return traces

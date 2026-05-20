@@ -44,7 +44,8 @@ RESET  := \033[0m
         test test-fast test-all test-profiler test-lab test-clean test-clean-target \
         drift-lab-viewer-bundle \
         drift-lab-build drift-lab-build-release drift-lab-verify \
-        drift-lab-export drift-lab-export-clean
+        drift-lab-export drift-lab-export-clean \
+        drift-lab-ci-preflight
 
 # Internal: assert the Tauri signing key exists before invoking cargo. Cheaper
 # to fail here than wait for the bundle stage to hit the same wall. The key
@@ -398,3 +399,25 @@ drift-lab-export-clean: ## Wipe dist/drift-lab/ so the next drift-lab-export sta
 	@printf "$(BLUE)▶$(RESET) rm -rf dist/drift-lab\n"
 	@rm -rf dist/drift-lab
 	@printf "$(GREEN)✓$(RESET) cleaned\n"
+
+# drift-lab-ci-preflight — cheap local mirror of the PR-build workflow
+#
+# Runs everything the CI workflow runs that's host-independent:
+#   1. Build the embedded static-profiler viewer (required for the desktop
+#      crate's RustEmbed to pick up the real dist/, not the build.rs stub).
+#   2. Read the drift-lab version via the same script CI uses.
+#   3. Run the CI helper-script self-tests (compute-shasums, read-version)
+#      against synthetic fixtures — so logic bugs surface here, not on the
+#      ~10-minute matrix runners.
+#
+# Skipped on purpose: `cargo tauri build` (5-10min, needs a signing key)
+# and `cargo test --lib` — those live in `drift-lab-verify` / `drift-lab-
+# build-release`. Run those first if you want the full mirror.
+drift-lab-ci-preflight: drift-lab-viewer-bundle ## CI parity check — viewer + helper-script tests + version sanity (skips cargo build/test; cheap)
+	@printf "$(BLUE)▶$(RESET) reading drift-lab version\n"
+	@v=$$(bash drift-lab/scripts/ci/read-version.sh); \
+	  printf "    drift-lab v$(CYAN)%s$(RESET)\n" "$$v"
+	@printf "$(BLUE)▶$(RESET) running CI helper-script self-tests\n"
+	@bash drift-lab/scripts/ci/test.sh
+	@printf "$(GREEN)✓$(RESET) preflight passed\n"
+	@printf "    (run $(CYAN)make drift-lab-verify$(RESET) for the heavier mirror: cargo check + lib tests)\n"

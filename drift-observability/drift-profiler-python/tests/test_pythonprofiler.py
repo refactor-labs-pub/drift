@@ -83,9 +83,12 @@ def test_profile_clears_state_between_runs():
 
 def test_unknown_trace_filled_in_when_handler_missed_ticks():
     """When `trace_count` < expected ticks, the missing slots get attributed
-    to a synthetic ('unknown', 'unknown', 0) trace. This test forces a
-    zero-tick window by NEVER starting the timer (we call profile with a
-    duration but the handler can't fire because we patch out the start).
+    to a synthetic unknown trace. This test forces a zero-tick window by
+    NEVER starting the timer (we call profile with a duration but the
+    handler can't fire because we patch out the start).
+
+    Frame shape is 5-tuple `(name, file, line, qualified_name, module)`
+    per Phase F1b — same as the real-frame path.
     """
     p = WallProfiler(period_ms=10)
     # Don't register — handler not installed → no ticks → all unknown.
@@ -95,7 +98,9 @@ def test_unknown_trace_filled_in_when_handler_missed_ticks():
     traces = p._collect_and_clear_traces(duration_ns=100_000_000)  # 100 ms
 
     # 100 ms / 10 ms period = 10 expected ticks, all unknown.
-    assert traces == {(('unknown', 'unknown', 0),): 10}
+    assert traces == {
+        (('unknown', 'unknown', 0, 'unknown', 'unknown'),): 10
+    }
 
 
 def test_period_ns_property():

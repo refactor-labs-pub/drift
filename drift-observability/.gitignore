@@ -49,3 +49,4 @@ drift-profiler-python/dist-py314
 drift-profiler-python/wheelhouse*
 drift-profiler-python/events.log
 drift-profiler-python/build
+drift-profiler-python/driftdockerprofiler/_profiler.cpython*

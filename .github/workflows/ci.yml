@@ -183,119 +183,106 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux build deps
-        if: matrix.runner == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            pkg-config \
-            build-essential \
-            file
+      # ── Cache layer 1: apt packages (Linux only) ──────────────────────
+      # Caches /var/cache/apt + installed-package state. On cache hit, apt
+      # skips re-download (~30-50s saved). Bump the `version:` field to
+      # force a refresh after editing the package list.
+      - name: Install Linux build deps (cached)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev pkg-config build-essential file
+          version: 1.0
 
+      # ── Cache layer 2: npm registry (both UIs) ────────────────────────
+      # Both lockfiles in cache-dependency-path so the viewer's npm ci
+      # also hits the runner-side npm cache.
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: drift-lab/desktop-ui/package-lock.json
+          cache-dependency-path: |
+            drift-lab/desktop-ui/package-lock.json
+            drift-static-profiler/viewer/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
 
+      # ── Cache layer 4: Rust target/ + ~/.cargo ────────────────────────
+      # shared-key MUST match drift-lab-desktop-build.yml so that:
+      #   1. main-push runs of this workflow warm the slot
+      #   2. PR runs of drift-lab-desktop-build.yml read from main's slot
+      # GitHub Actions cache scoping: default-branch (main) caches are
+      # readable by all branches/PRs but PR caches are PR-scoped, so the
+      # only way PRs get a warm cache is for main to populate it — this is
+      # that mechanism.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: drift-lab/src-tauri -> target
-          key: release-${{ matrix.label }}
+          shared-key: drift-lab-${{ matrix.label }}
 
-      - name: Cache cargo-tauri binary
-        id: tauri-cli-cache
-        uses: actions/cache@v4
+      # ── Cache layer 5: cargo-tauri binary (pre-built) ─────────────────
+      # taiki-e/install-action downloads a pre-built tauri-cli (~10s)
+      # instead of `cargo install` compiling from source (5-10min on miss).
+      - name: Install cargo-tauri (pre-built)
+        uses: taiki-e/install-action@v2
         with:
-          path: ~/.cargo/bin/cargo-tauri
-          # v3 invalidates caches that captured a wrong binary at this path.
-          # Symptom of a poisoned cache: `cargo tauri build` fails in ~1s with
-          # `error: unexpected argument 'tauri' found / Usage: rustup-init[EXE]`,
-          # because cargo dispatched to `cargo-tauri` and found rustup-init's
-          # clap parser instead of the real CLI.
-          key: cargo-tauri-3-${{ runner.os }}-${{ runner.arch }}
+          tool: tauri-cli@2.11.1
 
-      - name: Ensure rust toolchain and cargo-tauri are usable
+      # Some runner images ship ~/.cargo/bin/cargo as a hardlink to
+      # rustup-init instead of the rustup multi-call binary. Detect and
+      # repair before cargo is used (cargo-tauri itself comes from taiki-e
+      # above, so no cargo-tauri-specific repair needed).
+      - name: Verify cargo on PATH is functional
         shell: bash
         run: |
-          # ── Diagnose what's actually on PATH ───────────────────────────
-          # Print this unconditionally so any future failure has the runner
-          # state in the log without needing a re-run.
           echo "PATH=$PATH"
           echo "which cargo: $(command -v cargo || echo '<none>')"
-          echo "which rustc: $(command -v rustc || echo '<none>')"
-          echo "~/.cargo/bin contents:"
-          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "  <missing>"
-
-          # ── Repair cargo if it's not actually cargo ────────────────────
-          # We've seen runner images where ~/.cargo/bin/cargo (and other proxies)
-          # are hardlinks to rustup-init instead of the rustup multi-call binary.
-          # Symptom: any `cargo <subcommand>` fails with rustup-init's clap parser
-          # ("unexpected argument 'install'", "unexpected argument 'tauri'", etc.).
-          # rustup-init *does* accept --version and exits 0, so detect by checking
-          # the output contains "cargo" (real cargo prints "cargo X.Y.Z (...)").
           if ! command -v cargo >/dev/null || ! cargo --version 2>&1 | grep -qi "^cargo "; then
-            echo "::warning::cargo on PATH is broken or missing (got: $(cargo --version 2>&1 | head -1 || echo '<unrunnable>')) — reinstalling rust"
-            # Wipe the poisoned bin dir entirely; rustup-init recreates the proxies.
+            echo "::warning::cargo broken (got: $(cargo --version 2>&1 | head -1 || echo '<unrunnable>')) — reinstalling rust"
             rm -rf "$HOME/.cargo/bin"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
             # shellcheck disable=SC1091
             source "$HOME/.cargo/env"
-            # Persist the repair into subsequent steps' PATH. Prepending (not
-            # appending) so we beat any other cargo elsewhere on the runner.
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             echo "Repaired cargo: $(cargo --version)"
-          fi
-
-          # ── Ensure cargo-tauri itself is real ──────────────────────────
-          # Same identity check applied to ~/.cargo/bin/cargo-tauri. A wipe of
-          # ~/.cargo/bin above also removes any prior cargo-tauri, so the
-          # install branch below covers both fresh-repair and ordinary
-          # cache-miss paths.
-          bin="$HOME/.cargo/bin/cargo-tauri"
-          if [ -x "$bin" ] && "$bin" --version 2>&1 | grep -qi "tauri"; then
-            echo "cargo-tauri OK: $("$bin" --version)"
-          else
-            if [ -e "$bin" ]; then
-              echo "::warning::Cached binary at $bin is not cargo-tauri (got: $("$bin" --version 2>&1 | head -1 || echo '<unrunnable>')) — replacing"
-            else
-              echo "::notice::Installing cargo-tauri (cache miss)"
-            fi
-            rm -f "$bin"
-            cargo install tauri-cli --version "^2.0" --locked
-            "$bin" --version 2>&1 | grep -qi "tauri"
-            echo "cargo-tauri installed: $("$bin" --version)"
           fi
 
       - name: Install frontend deps
         working-directory: drift-lab/desktop-ui
         run: npm ci
 
-      # The Rust crate embeds the static-profiler viewer's built dist/
-      # via rust-embed at compile time. Without this step, `cargo tauri
-      # build` would link in the placeholder index.html that
-      # `drift-lab/src-tauri/build.rs` writes on a fresh checkout — the
-      # shipped .app would render "viewer not built" instead of the React
-      # SPA. The local Makefile path is `make drift-lab-viewer-bundle`;
-      # we reproduce its `npm ci && npm run build` here so neither side
-      # silently drifts from the other.
-      - name: Build static-profiler viewer (embedded into the desktop app)
+      # ── Cache layer 3: static-profiler viewer dist ────────────────────
+      # The Rust crate embeds viewer/dist/ via rust-embed at compile time.
+      # On a fresh checkout build.rs drops a stub index.html so the crate
+      # still compiles, but the stub ships "viewer not built" instead of
+      # the real React SPA. Cache the result keyed on every input that
+      # affects the output. The post-restore guard fails the build if a
+      # cached dist turns out to be the stub.
+      - name: Cache static-profiler viewer dist
+        id: viewer-cache
+        uses: actions/cache@v4
+        with:
+          path: drift-static-profiler/viewer/dist
+          key: viewer-dist-${{ runner.os }}-${{ hashFiles('drift-static-profiler/viewer/package-lock.json', 'drift-static-profiler/viewer/src/**', 'drift-static-profiler/viewer/index.html', 'drift-static-profiler/viewer/vite.config.*', 'drift-static-profiler/viewer/tsconfig*.json') }}
+
+      - name: Build static-profiler viewer (cache miss only)
+        if: steps.viewer-cache.outputs.cache-hit != 'true'
         working-directory: drift-static-profiler/viewer
         run: |
           npm ci
           npm run build
-          test -f dist/index.html || { echo "::error::viewer build did not produce dist/index.html"; exit 1; }
+
+      - name: Verify viewer dist (and not the build.rs stub)
+        working-directory: drift-static-profiler/viewer
+        run: |
+          test -f dist/index.html || { echo "::error::viewer dist missing"; exit 1; }
+          if grep -q '<!-- drift-lab build.rs stub -->' dist/index.html; then
+            echo "::error::cached viewer dist is the build.rs stub — invalidate the cache"
+            exit 1
+          fi
 
       - name: Build desktop app (release)
         working-directory: drift-lab

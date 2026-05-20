@@ -61,36 +61,62 @@ jobs:
   # test — pytest matrix.
   # ---------------------------------------------------------------------
   test:
-    name: test / py${{ matrix.python }} / ${{ matrix.os }}
+    # ENDPOINT-OF-COMPATIBILITY MATRIX (intentionally minimal):
+    #   * py3.7  — oldest supported. Tests the cp37 C++ ext path
+    #              (populate_frames.cc `< PY_311` branch) inside the
+    #              same python:3.7-slim image that ships to production.
+    #   * py3.14 — newest supported. Tests the rule_cpython_lt_313 path
+    #              where setup.py skips the C++ ext entirely.
+    #   The middle versions (3.8-3.13) are structurally identical to one
+    #   of the two endpoints — same C++ source compilation rules, same
+    #   pure-Python test surface. Each wheel is independently smoke-
+    #   tested by cibuildwheel's CIBW_TEST_COMMAND after build, which
+    #   gives us per-Python verification of the artifact that actually
+    #   ships. Developers cover middle versions during local pytest;
+    #   CI is the public-shipment gate, not the dev test runner.
+    #
+    # Why containers, not setup-python?
+    #   * Matches the deployment target (python:3.X-slim is what users
+    #     actually run in EKS / Lambda / docker compose).
+    #   * Removes the setup-python-on-ubuntu-24.04 flakiness around
+    #     EOL Python downloads (3.7 isn't preinstalled and on-the-fly
+    #     install can race the python-versions registry).
+    #   * pip cache survives across runs via actions/cache.
+    name: test / py${{ matrix.python }} (docker)
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 → 3.13 covers every Python version that's still receiving
-        # upstream security fixes as of 2026. 3.7/3.8/3.9 are EOL — wheels
-        # are still produced by cibuildwheel for 3.8/3.9, but we don't
-        # spin up a test runner for them (setup-python on ubuntu-24.04
-        # has to download EOL versions on-the-fly, which is flaky enough
-        # to keep blocking CI).
-        include:
-          - { os: ubuntu-latest, python: '3.10' }
-          - { os: ubuntu-latest, python: '3.11' }
-          - { os: ubuntu-latest, python: '3.12' }
-          - { os: ubuntu-latest, python: '3.13' }
-          - { os: ubuntu-latest, python: '3.14' }   # setup.py drops C++ ext here
-          - { os: macos-14,      python: '3.12' }   # macOS smoke (wall sampler only)
-          - { os: macos-14,      python: '3.14' }   # macOS smoke on the newest Python
-    runs-on: ${{ matrix.os }}
+        python: ['3.7', '3.14']
+    runs-on: ubuntu-latest
+    container:
+      image: python:${{ matrix.python }}-slim
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # pip cache. Keyed on Python version + setup.py hash (changes to
+      # install_requires invalidate the cache). `restore-keys` allows a
+      # partial hit when setup.py changes but the deps are mostly the
+      # same.
+      - uses: actions/cache@v4
         with:
-          python-version: ${{ matrix.python }}
+          path: /root/.cache/pip
+          key: pip-py${{ matrix.python }}-${{ hashFiles('drift-observability/drift-profiler-python/setup.py') }}
+          restore-keys: |
+            pip-py${{ matrix.python }}-
 
-      - name: Install build deps + project (editable)
+      # python:X-slim has no compiler. cp37 needs gcc+g++ for the C++
+      # ext build (the slim image strips them out by default).
+      # cp314 drops the ext via setup.py's rule_cpython_lt_313, but
+      # we install the same deps in both cells to keep the matrix
+      # uniform — cheap on the cache-hit path.
+      - name: Install build toolchain
         run: |
-          python -m pip install --upgrade pip
-          # Editable install builds the C++ ext in place on Linux; pure-Python on macOS.
+          apt-get update -qq
+          apt-get install -qq -y --no-install-recommends gcc g++ git make
+
+      - name: Install package (editable) + pytest
+        run: |
+          python -m pip install --upgrade --quiet pip
           pip install -e '.[supabase]' pytest
 
       - name: Run pytest

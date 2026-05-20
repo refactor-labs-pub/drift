@@ -118,5 +118,16 @@ def snapshot() -> Tuple[float, int, int]:
   Called by the client at window close; the same tuple is stamped
   on every event in that window. Three probes back-to-back is cheap
   enough that we don't bother caching across windows.
+
+  Coerces `peak >= rss`. On Linux, `/proc/self/statm` (used for
+  current RSS) and `ru_maxrss` (used for peak) are updated at
+  different instants by the kernel — under sustained allocation the
+  current-RSS read can briefly exceed the stale peak read. The
+  user-facing invariant ("peak is monotonic ≥ current") must hold
+  in every emitted event, so we max() at the boundary rather than
+  ship the kernel's racy view downstream.
   """
-  return cpu_load(), memory_rss_bytes(), memory_peak_bytes()
+  cpu = cpu_load()
+  rss = memory_rss_bytes()
+  peak = memory_peak_bytes()
+  return cpu, rss, max(peak, rss)

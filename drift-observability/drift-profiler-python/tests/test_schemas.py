@@ -71,11 +71,12 @@ def test_schema_for_each_event_type():
     # Discriminator → $defs name lookup table. Mirrors `_TYPE_TO_DEF`
     # in driftdockerprofiler.schemas.
     expected = {
-        "wall_trace":    "WallTraceEvent",
-        "cpu_trace":     "CPUTraceEvent",
-        "wall_profile":  "WallProfileEvent",
-        "cpu_profile":   "CPUProfileEvent",
-        "function_call": "FunctionCallEvent",
+        "wall_trace":       "WallTraceEvent",
+        "cpu_trace":        "CPUTraceEvent",
+        "wall_profile":     "WallProfileEvent",
+        "cpu_profile":      "CPUProfileEvent",
+        "function_call":    "FunctionCallEvent",
+        "profile_metadata": "ProfileMetadataEvent",
     }
     assert set(expected) == set(schemas.VALID_EVENT_TYPES)
     for t, def_name in expected.items():
