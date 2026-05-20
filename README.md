@@ -1,817 +1,349 @@
+<div align="center">
+
 # Drift
 
-Performance reports for your PRs — React SPA + Hono API, backed by Postgres + Drizzle.
+**Find, fix, and prevent performance regressions — before they hit production.**
 
-## Quick start
+Open-source performance & FinOps platform: static call-graph analysis +
+runtime profiling + per-PR verdicts. One monorepo, five composable surfaces,
+zero vendor lock-in.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![drift-lab](https://img.shields.io/github/v/release/refactorlab/drift?filter=drift-lab-v*&label=drift-lab&color=ff6b3d)](https://github.com/refactorlab/drift/releases?q=drift-lab)
+[![PyPI](https://img.shields.io/pypi/v/drift-docker-profiler.svg?label=drift-docker-profiler)](https://pypi.org/project/drift-docker-profiler/)
+
+![PR performance report](docs/pr-performance-report.jpeg)
+
+</div>
+
+---
+
+## Why Drift exists
+
+Most performance problems are **discovered in production, paid for in cloud
+bills, and fixed under pressure.** Three patterns dominate the bill:
+
+- **N+1 queries** and missing caches that scale linearly with traffic.
+- **Recursive / expensive compute** on hot request paths.
+- **Blocking I/O in async code** that silently starves workers.
+
+By the time these show up in APM, you're already over-provisioned —
+larger DB instances, more app replicas, hotter cache tiers — and the
+team is in incident-response mode instead of shipping features.
+
+Drift moves the check **left**: every PR is profiled, every hot path is
+inspected statically, every regression is annotated on the diff. The
+engineer who introduced the slowdown is the one who fixes it, *while
+the context is still fresh* — not the on-call six weeks later.
+
+### The FinOps math
+
+| Where you catch it | Cost to fix (rough) | Cost while it lives in prod |
+|---|---|---|
+| Editor (lint / static profiler) | minutes | $0 |
+| Pull request (Drift verdict) | hours | $0 |
+| Staging load test | days | $0 |
+| **Production** | **weeks + incident** | **$$$/day in cloud spend + churn** |
+
+A single unchecked N+1 against a 5M-row table on a Tier-2 RDS instance
+typically lights up ~$3–8k/month in additional read IOPS plus the
+replicas you spin up to absorb the latency. Drift's static profiler
+catches that class of issue in seconds, *without running the code*.
+
+---
+
+## What's in this monorepo
+
+Drift is intentionally split into **independent surfaces** so you can adopt
+one piece without taking the rest. Every package ships on its own
+release cadence and can be used standalone.
+
+```
+drift/
+├── drift-static-profiler/   Rust  · static call-graph analyzer + viewer
+├── drift-observability/     Python + Go · runtime profiler + ingest server
+│   ├── drift-profiler-python/   pip package (PyPI: drift-docker-profiler)
+│   ├── observability-server/    Go ingest + SSE fan-out
+│   └── deploy/                  Helm chart (2 Deployments, 2 Services)
+├── drift-lab/               Tauri 2 · macOS/Linux desktop app
+├── web-app/                 Hono + React + Postgres · the cloud portal
+├── action/  action.yml      GitHub Action — per-PR verdict
+└── app/     manifest.yml    GitHub App — zero-touch alternative
+```
+
+| Surface | When to reach for it |
+|---|---|
+| **`drift-static-profiler`** | You want findings on every push without booting infra. Reads source only — no containers, no traffic, no agents. |
+| **`drift-profiler-python`** | You're running Python in containers and want sampled wall / CPU flame graphs streamed to a log, file, or Supabase channel. |
+| **`drift-observability` server** | You want a small, self-hostable Go service that tails JSONL events and fans out over SSE. |
+| **`drift-lab`** | You're an engineer and want a local UI to profile your dev container and browse flame graphs. |
+| **`web-app`** | You want the multi-tenant cloud portal — scan history, PR reports, dashboards. |
+| **GitHub Action / App** | You want PR-time verdicts and annotations on every change. |
+
+---
+
+## The four ways Drift catches regressions
+
+### 1 · Static call-graph analysis (no execution)
+
+`drift-static-profiler` reads a source tree, builds the symbol-level call
+graph, and surfaces findings the moment code is written — Python, Java,
+TypeScript, JavaScript, Go, Rust, Scala, Kotlin. No containers, no
+traffic, no agent.
+
+![Static scan report](docs/static-scan-report.jpeg)
+
+For each entry point it produces a structured report: health score,
+findings by kind (recursive, expensive compute, missing caching,
+noisy log), category reach (DB / Net / IO / Compute), language
+breakdown, top hot zones, and refactor candidates. The output is a
+single JSON file the viewer (or your CI) consumes.
 
 ```bash
+cd drift-static-profiler
+cargo run --release -- analyze /path/to/repo --entry main > report.json
+```
+
+→ See [drift-static-profiler/ARCHITECTURE.md](drift-static-profiler/ARCHITECTURE.md)
+for the full pipeline.
+
+### 2 · Runtime profiling (sampling, low overhead)
+
+`drift-docker-profiler` is a wall + CPU stack-sampling profiler for
+Python — a surgical fork of [`google-cloud-profiler`](https://github.com/GoogleCloudPlatform/cloud-profiler-python)
+with the GCP transport stripped out. Zero runtime deps on the base
+install. Drop two lines into your service:
+
+```python
+import driftdockerprofiler
+
+driftdockerprofiler.start(service='my-service', service_version='1.0.0')
+```
+
+Events stream to a JSONL file, or to Supabase Realtime when the
+env vars are set. The companion Go ingest server tails the file and
+fans out events over SSE for a live viewer.
+
+→ [drift-observability/drift-profiler-python/README.md](drift-observability/drift-profiler-python/README.md)
+
+### 3 · Local profiling in a desktop app
+
+`drift-lab` is a native Tauri 2 + React + Rust app that profiles
+Dockerized services on your laptop and shows live flame graphs, call
+trees, statistics, and a past-scan archive.
+
+![Runtime flame graph viewer](docs/runtime-flame-graph.jpeg)
+
+```bash
+cd drift-lab
+make setup      # rustup + tauri-cli + icons + npm deps (~5 min)
+make            # opens the app with hot reload
+```
+
+Or grab a pre-built bundle from
+[GitHub Releases](https://github.com/refactorlab/drift/releases?q=drift-lab):
+universal `.dmg` for macOS, `.deb` + AppImage for Linux. Auto-updates
+via Ed25519-signed releases.
+
+→ [drift-lab/README.md](drift-lab/README.md)
+
+### 4 · Per-PR verdict on GitHub
+
+The GitHub Action (`drift-dev/drift-action@v1`) profiles candidate
+builds, compares against the baseline, and posts a check + sticky
+comment with annotations on the exact lines that regressed.
+
+![Issue detail with suggested autofix](docs/issue-detail-autofix.jpeg)
+
+```yaml
+# .github/workflows/drift.yml
+name: Drift
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: drift-dev/drift-action@v1
+        with:
+          api-token: ${{ secrets.DRIFT_API_TOKEN }}
+          profile-command: 'npx drift-profile'
+          fail-on: regression
+```
+
+Prefer zero-YAML? Install the **GitHub App** at
+[github.com/marketplace/drift](https://github.com/marketplace/drift) —
+same verdict, runs on Drift cloud, configurable via `.drift.yaml`.
+
+→ [action.yml](action.yml) · [MARKETPLACE.md](MARKETPLACE.md)
+
+---
+
+## Suggested fixes, not just warnings
+
+Drift treats a finding as half the work. Every high-severity issue
+ships with a structured suggested fix — the diff the engineer would
+have written if they'd seen the problem first.
+
+![Code refactor suggestion](docs/code-refactor-suggestion.jpeg)
+
+The suggestions come from two sources:
+
+1. **Pattern-rule rewrites** baked into the static profiler
+   (N+1 → batched `IN` query, recursion → memoization, sync I/O in
+   async → `asyncio.to_thread`, etc.).
+2. **LLM-assisted refactors** for ambiguous cases, gated behind your
+   own API key — pluggable, off by default, never exfiltrates source
+   without explicit opt-in.
+
+The viewer renders the diff inline so the engineer can copy-paste or
+hit the **Generate fix PR** button.
+
+---
+
+## Scaling Drift across an organization
+
+| Org size | Recommended setup |
+|---|---|
+| Solo / small repo | `drift-lab` desktop app + run `drift-static-profiler` in pre-commit. |
+| Single team | Add the GitHub Action; gate merges on `fail-on: regression`. |
+| Multi-team org | Install the GitHub App org-wide; deploy `drift-observability` next to your services for production traces; self-host `web-app` for dashboards. |
+| Regulated / air-gapped | Run everything locally: static profiler in CI, Python profiler with `JsonlFileSink`, web-app + Postgres on internal infra. Nothing leaves your VPC. |
+
+Every package is **MIT-licensed open source** (the Python profiler is
+Apache-2.0 to match upstream). There is no "community vs. enterprise"
+edition — the cloud product is convenience, not capability.
+
+### Cost & overhead, by surface
+
+| Surface | Runtime cost | CI cost | Infra |
+|---|---|---|---|
+| `drift-static-profiler` | none (no execution) | seconds per scan | none |
+| `drift-profiler-python` | <2% CPU at default `period_ms=10` | none | optional JSONL volume |
+| `drift-observability` server | small Go pod, ~20 MB RSS | none | 1 Deployment + 1 Service |
+| `drift-lab` | local only | none | none |
+| `web-app` | optional (only for cloud portal) | none | Postgres + Bun runtime |
+
+---
+
+## Quickstart — the whole stack on one laptop
+
+The fastest way to see all pieces talking to each other:
+
+```bash
+git clone https://github.com/refactorlab/drift.git
+cd drift
+
+# 1. Spin up the cloud portal locally (web-app + Postgres + pgAdmin)
 docker compose up --build
+# → http://localhost:5000        web app  (login admin@drift.local / 1234)
+# → http://localhost:5000/docs   API docs
+# → http://localhost:5050        pgAdmin
+
+# 2. Run the static profiler against your own repo
+cd drift-static-profiler
+cargo run --release -- analyze ~/code/your-repo --entry main
+
+# 3. (Optional) Boot the runtime stack on minikube
+cd ../drift-observability
+make install && make up
+# → http://localhost:8000/docs   FastAPI demo app
+# → http://localhost:8080/live   live SSE flame-event viewer
+
+# 4. (Optional) Launch the desktop app
+cd ../drift-lab && make setup && make
 ```
 
-- Web app: http://localhost:5000
-- pgAdmin: http://localhost:5050  (login `admin@example.com` / `admin`)
-- Postgres: `localhost:5432`  (`drift` / `drift` / db `drift`)
-- API docs: http://localhost:5000/docs
-
-## Demo login
-
-The migrations container creates an admin user on every boot (idempotent upsert with an argon2id-hashed password). Sign in at the web app with:
-
-| Field    | Value              |
-|----------|--------------------|
-| Email    | `admin@drift.local`|
-| Password | `1234`             |
-
-Override via env vars before `docker compose up`:
-
-```bash
-export ADMIN_EMAIL=you@example.com
-export ADMIN_PASSWORD='your-strong-password'
-export JWT_SECRET="$(openssl rand -hex 32)"   # required in production
-docker compose up --build
-```
-
-## Auth model
-
-- **Access token** — JWT, 15 min TTL, in `drift_access` HttpOnly+Secure+SameSite=Lax cookie.
-- **Refresh token** — JWT, 7 day TTL, in `drift_refresh` HttpOnly+Secure cookie scoped to `/api/auth/refresh`.
-- **Password hashing** — argon2id via `Bun.password.hash` (constant-time verify).
-- **Endpoints** — `POST /api/auth/token`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`.
-- **Middleware** — every `/api/*` route except `/api/auth/*` requires a valid access cookie; the SPA shows a login page on 401.
-- **Production** — server refuses to boot if `JWT_SECRET` is missing or shorter than 32 chars.
+Each subdirectory has its own `README.md` and `Makefile` — `make help`
+in any of them lists the targets.
 
 ---
 
-Below is the original step-by-step scaffolding guide that produced the initial layout — kept for reference.
-
----
-
-Here's a complete scaffolding guide for your `web-app` setup. I'll structure it as a step-by-step you can execute.
-
-## Final structure preview
+## Repository layout in detail
 
 ```
-web-app/
-├── package.json              # Hono server (Bun)
-├── tsconfig.json
-├── bun.lock
-├── db.sqlite                 # SQLite database
-├── drizzle.config.ts
-├── .env
-├── .gitignore
-├── src/
-│   ├── index.ts              # Hono entry
-│   ├── db/
-│   │   ├── client.ts         # Bun SQLite + Drizzle
-│   │   └── schema.ts         # User table etc.
-│   ├── routes/
-│   │   ├── auth.ts
-│   │   └── users.ts
-│   ├── middleware/
-│   │   └── auth.ts
-│   └── lib/
-│       └── env.ts
-└── web/                      # React SPA
-    ├── package.json
-    ├── tsconfig.json
-    ├── vite.config.ts
-    ├── index.html
-    └── src/
-        ├── main.tsx
-        ├── App.tsx
-        ├── routes/
-        │   ├── Home.tsx
-        │   ├── Login.tsx
-        │   └── Dashboard.tsx
-        └── lib/
-            └── api.ts
+drift/
+├── README.md                  ← you are here
+├── LICENSE                    MIT
+├── Makefile                   top-level convenience targets
+├── docker-compose.yml         web-app + Postgres + pgAdmin
+│
+├── drift-static-profiler/     Rust analyzer + Vite/React viewer
+│   ├── src/                   tags · graph · roots · tree · insights · report
+│   ├── viewer/                React SPA that renders Report JSON
+│   ├── tests/                 integration corpus + schema validation
+│   ├── ARCHITECTURE.md        file-by-file walkthrough
+│   └── INSIGHTS_PLAN.md       finding rules + severity model
+│
+├── drift-observability/
+│   ├── drift-profiler-python/ pip package · PyPI: drift-docker-profiler
+│   ├── observability-server/  Go: /ingest, /live_logs (SSE), /docs
+│   ├── test-python-web-server/ FastAPI demo wrapped with the profiler
+│   ├── deploy/drift-demo/     Helm chart for the 2-Deployment topology
+│   └── dev/                   Tiltfile + Makefile entry points
+│
+├── drift-lab/                 Tauri 2 + React + Rust desktop app
+│   ├── desktop-ui/            React + Vite + TS frontend
+│   ├── src-tauri/             Rust shell, workflow, docker, db
+│   ├── scripts/install-macos.sh  one-line installer for unsigned macOS
+│   └── README.md              full dev / build / release guide
+│
+├── web-app/                   Hono + React + Postgres + Drizzle
+│   ├── src/                   Hono API (auth, scans, reports)
+│   ├── web/                   React SPA
+│   ├── drizzle/               migrations
+│   └── api/                   serverless entry (Vercel-compatible)
+│
+├── action/                    GitHub Action source (composite + Node 20)
+├── action.yml                 marketplace manifest
+├── app/manifest.yml           GitHub App manifest (one-click install)
+├── examples/drift.yml         example consumer workflow
+└── docs/                      screenshots used in this README
 ```
 
 ---
 
-## Step 1: Prerequisites
+## Documentation index
 
-```bash
-# Install Bun if you haven't
-curl -fsSL https://bun.sh/install | bash
-
-# Verify
-bun --version   # should be 1.x
-```
-
----
-
-## Step 2: Create the project root
-
-```bash
-mkdir web-app
-cd web-app
-bun init -y
-```
-
-This creates `package.json`, `tsconfig.json`, and a stub `index.ts`.
+| Doc | What it covers |
+|---|---|
+| [drift-static-profiler/ARCHITECTURE.md](drift-static-profiler/ARCHITECTURE.md) | Full pipeline, file-by-file, including the insight passes |
+| [drift-static-profiler/INSIGHTS_PLAN.md](drift-static-profiler/INSIGHTS_PLAN.md) | Finding rules, severity model, calibration data |
+| [drift-static-profiler/CALIBRATION.md](drift-static-profiler/CALIBRATION.md) | How thresholds were chosen, OSS corpus methodology |
+| [drift-lab/README.md](drift-lab/README.md) | Dev loop, install scripts, auto-update, signing |
+| [drift-lab/UPDATER.md](drift-lab/UPDATER.md) | Ed25519 release-signing flow |
+| [drift-observability/README.md](drift-observability/README.md) | Two-Deployment topology, event format, trim controls |
+| [drift-observability/drift-profiler-python/README.md](drift-observability/drift-profiler-python/README.md) | Python agent — sinks, sampling, exclude paths |
+| [MARKETPLACE.md](MARKETPLACE.md) | GitHub Action + App install & config reference |
 
 ---
 
-## Step 3: Install backend dependencies
+## License
 
-```bash
-# Hono + middleware
-bun add hono
-bun add @hono/zod-validator zod
+- **MIT** for the monorepo (see [LICENSE](LICENSE)).
+- **Apache-2.0** for `drift-profiler-python` to match its upstream
+  (Google Cloud Profiler).
 
-# DB: Drizzle ORM with Bun's native SQLite
-bun add drizzle-orm
-bun add -d drizzle-kit @types/bun
-
-# Auth helpers (JWT + password hashing)
-bun add hono/jwt   # built into hono, no install needed actually
-# bcrypt alternative for Bun:
-# Bun has Bun.password built-in, no install needed
-```
-
-> Note: `bun:sqlite` is built into Bun — no install needed. `Bun.password` is also built-in for hashing.
+You can self-host any combination of these components — no telemetry,
+no API key required for the open-source paths.
 
 ---
 
-## Step 4: Configure `package.json` (root)
-
-Replace `web-app/package.json` with:
-
-```json
-{
-  "name": "web-app",
-  "module": "src/index.ts",
-  "type": "module",
-  "scripts": {
-    "dev": "bun run --hot src/index.ts",
-    "dev:web": "cd web && bun run dev",
-    "dev:all": "bun run dev & bun run dev:web",
-    "build:web": "cd web && bun run build",
-    "build": "bun run build:web && bun build src/index.ts --target=bun --outdir=dist",
-    "start": "bun run dist/index.js",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun run src/db/migrate.ts",
-    "db:studio": "drizzle-kit studio"
-  },
-  "dependencies": {
-    "drizzle-orm": "^0.36.0",
-    "hono": "^4.6.0",
-    "zod": "^3.23.0",
-    "@hono/zod-validator": "^0.4.0"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "drizzle-kit": "^0.28.0",
-    "typescript": "^5.6.0"
-  }
-}
-```
-
----
-
-## Step 5: `tsconfig.json` (root)
-
-```json
-{
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ESNext"],
-    "types": ["bun-types"],
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
-  },
-  "include": ["src/**/*"]
-}
-```
-
----
-
-## Step 6: `.env` and `.gitignore`
-
-`web-app/.env`:
-```
-DATABASE_URL=./db.sqlite
-JWT_SECRET=change-me-to-a-long-random-string
-PORT=3000
-NODE_ENV=development
-```
-
-`web-app/.gitignore`:
-```
-node_modules
-dist
-*.sqlite
-*.sqlite-journal
-.env
-.DS_Store
-web/dist
-```
-
----
-
-## Step 7: Database — Drizzle schema and client
-
-`src/db/schema.ts`:
-
-```ts
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import { sql } from 'drizzle-orm';
-
-export const users = sqliteTable('users', {
-  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
-  email: text('email').notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
-  name: text('name'),
-  role: text('role', { enum: ['admin', 'user'] }).notNull().default('user'),
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-});
-
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-```
-
-`src/db/client.ts`:
-
-```ts
-import { Database } from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import * as schema from './schema';
-
-const sqlite = new Database(process.env.DATABASE_URL ?? './db.sqlite', {
-  create: true,
-});
-sqlite.exec('PRAGMA journal_mode = WAL;');
-sqlite.exec('PRAGMA foreign_keys = ON;');
-
-export const db = drizzle(sqlite, { schema });
-export { schema };
-```
-
-`src/db/migrate.ts`:
-
-```ts
-import { Database } from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
-
-const sqlite = new Database(process.env.DATABASE_URL ?? './db.sqlite', { create: true });
-const db = drizzle(sqlite);
-
-migrate(db, { migrationsFolder: './drizzle' });
-console.log('✅ Migrations applied');
-```
-
-`drizzle.config.ts` (at root):
-
-```ts
-import type { Config } from 'drizzle-kit';
-
-export default {
-  schema: './src/db/schema.ts',
-  out: './drizzle',
-  dialect: 'sqlite',
-  dbCredentials: {
-    url: './db.sqlite',
-  },
-} satisfies Config;
-```
-
----
-
-## Step 8: Auth middleware
-
-`src/middleware/auth.ts`:
-
-```ts
-import { createMiddleware } from 'hono/factory';
-import { verify } from 'hono/jwt';
-import { db } from '@/db/client';
-import { users, type User } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-
-type AuthContext = {
-  Variables: {
-    user: User;
-  };
-};
-
-export const authMiddleware = createMiddleware<AuthContext>(async (c, next) => {
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-
-  const token = authHeader.slice(7);
-  try {
-    const payload = await verify(token, process.env.JWT_SECRET!);
-    const userId = payload.sub as string;
-
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-    if (!user) return c.json({ error: 'User not found' }, 401);
-
-    c.set('user', user);
-    await next();
-  } catch {
-    return c.json({ error: 'Invalid token' }, 401);
-  }
-});
-
-export const requireRole = (role: 'admin' | 'user') =>
-  createMiddleware<AuthContext>(async (c, next) => {
-    const user = c.get('user');
-    if (user.role !== role && user.role !== 'admin') {
-      return c.json({ error: 'Forbidden' }, 403);
-    }
-    await next();
-  });
-```
-
----
-
-## Step 9: Auth routes
-
-`src/routes/auth.ts`:
-
-```ts
-import { Hono } from 'hono';
-import { sign } from 'hono/jwt';
-import { zValidator } from '@hono/zod-validator';
-import { z } from 'zod';
-import { db } from '@/db/client';
-import { users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-
-const auth = new Hono();
-
-const credentialsSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-});
-
-auth.post('/register', zValidator('json', credentialsSchema), async (c) => {
-  const { email, password } = c.req.valid('json');
-
-  const existing = await db.select().from(users).where(eq(users.email, email));
-  if (existing.length) return c.json({ error: 'Email already registered' }, 409);
-
-  const passwordHash = await Bun.password.hash(password);
-  const [user] = await db
-    .insert(users)
-    .values({ email, passwordHash })
-    .returning({ id: users.id, email: users.email, role: users.role });
-
-  const token = await sign(
-    { sub: user.id, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
-    process.env.JWT_SECRET!
-  );
-
-  return c.json({ user, token });
-});
-
-auth.post('/login', zValidator('json', credentialsSchema), async (c) => {
-  const { email, password } = c.req.valid('json');
-
-  const [user] = await db.select().from(users).where(eq(users.email, email));
-  if (!user) return c.json({ error: 'Invalid credentials' }, 401);
-
-  const ok = await Bun.password.verify(password, user.passwordHash);
-  if (!ok) return c.json({ error: 'Invalid credentials' }, 401);
-
-  const token = await sign(
-    { sub: user.id, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 },
-    process.env.JWT_SECRET!
-  );
-
-  return c.json({
-    user: { id: user.id, email: user.email, role: user.role },
-    token,
-  });
-});
-
-export { auth };
-```
-
----
-
-## Step 10: User routes
-
-`src/routes/users.ts`:
-
-```ts
-import { Hono } from 'hono';
-import { db } from '@/db/client';
-import { users } from '@/db/schema';
-import { authMiddleware, requireRole } from '@/middleware/auth';
-
-const userRoutes = new Hono();
-
-userRoutes.use('*', authMiddleware);
-
-userRoutes.get('/me', (c) => {
-  const user = c.get('user');
-  return c.json({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-  });
-});
-
-userRoutes.get('/', requireRole('admin'), async (c) => {
-  const all = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      name: users.name,
-      role: users.role,
-      createdAt: users.createdAt,
-    })
-    .from(users);
-  return c.json(all);
-});
-
-export { userRoutes };
-```
-
----
-
-## Step 11: Main Hono entry
-
-`src/index.ts`:
-
-```ts
-import { Hono } from 'hono';
-import { logger } from 'hono/logger';
-import { cors } from 'hono/cors';
-import { auth } from '@/routes/auth';
-import { userRoutes } from '@/routes/users';
-
-const app = new Hono();
-
-app.use('*', logger());
-app.use(
-  '/api/*',
-  cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000'],
-    credentials: true,
-  })
-);
-
-// API routes
-app.route('/api/auth', auth);
-app.route('/api/users', userRoutes);
-
-app.get('/api/health', (c) => c.json({ ok: true }));
-
-// Serve React SPA in production
-if (process.env.NODE_ENV === 'production') {
-  app.get('*', async (c) => {
-    const path = c.req.path === '/' ? '/index.html' : c.req.path;
-    const file = Bun.file(`./web/dist${path}`);
-    if (await file.exists()) {
-      return new Response(file);
-    }
-    // SPA fallback for react-router
-    return new Response(Bun.file('./web/dist/index.html'));
-  });
-}
-
-const port = Number(process.env.PORT ?? 3000);
-console.log(`🔥 Hono running on http://localhost:${port}`);
-
-export default {
-  port,
-  fetch: app.fetch,
-};
-```
-
----
-
-## Step 12: Set up the React frontend in `web/`
-
-```bash
-cd web-app
-bun create vite web --template react-ts
-cd web
-bun install
-bun add react-router-dom
-```
-
-Update `web/package.json` scripts:
-
-```json
-{
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
-  }
-}
-```
-
-`web/vite.config.ts`:
-
-```ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import path from 'node:path';
-
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-  server: {
-    port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-      },
-    },
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-  },
-});
-```
-
----
-
-## Step 13: React app code
-
-`web/src/lib/api.ts`:
-
-```ts
-const API_BASE = '/api';
-
-export class ApiClient {
-  private token: string | null = null;
-
-  constructor() {
-    this.token = sessionStorage.getItem('token');
-  }
-
-  setToken(token: string | null) {
-    this.token = token;
-    if (token) sessionStorage.setItem('token', token);
-    else sessionStorage.removeItem('token');
-  }
-
-  async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
-        ...options.headers,
-      },
-    });
-    if (!res.ok) throw new Error((await res.json()).error ?? 'Request failed');
-    return res.json();
-  }
-
-  login(email: string, password: string) {
-    return this.request<{ user: { id: string; email: string; role: string }; token: string }>(
-      '/auth/login',
-      { method: 'POST', body: JSON.stringify({ email, password }) }
-    );
-  }
-
-  register(email: string, password: string) {
-    return this.request<{ user: { id: string; email: string; role: string }; token: string }>(
-      '/auth/register',
-      { method: 'POST', body: JSON.stringify({ email, password }) }
-    );
-  }
-
-  me() {
-    return this.request<{ id: string; email: string; name: string | null; role: string }>('/users/me');
-  }
-}
-
-export const api = new ApiClient();
-```
-
-`web/src/App.tsx`:
-
-```tsx
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Home from './routes/Home';
-import Login from './routes/Login';
-import Dashboard from './routes/Dashboard';
-
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="*" element={<Navigate to="/" />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
-```
-
-`web/src/main.tsx`:
-
-```tsx
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App';
-import './index.css';
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
-```
-
-`web/src/routes/Home.tsx`:
-
-```tsx
-import { Link } from 'react-router-dom';
-
-export default function Home() {
-  return (
-    <div style={{ padding: 24 }}>
-      <h1>Web App</h1>
-      <p>
-        <Link to="/login">Login</Link> · <Link to="/dashboard">Dashboard</Link>
-      </p>
-    </div>
-  );
-}
-```
-
-`web/src/routes/Login.tsx`:
-
-```tsx
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
-
-export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    try {
-      const { token } = await api.login(email, password);
-      api.setToken(token);
-      navigate('/dashboard');
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  return (
-    <div style={{ padding: 24, maxWidth: 360 }}>
-      <h1>Login</h1>
-      <form onSubmit={submit}>
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit">Sign in</button>
-      </form>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-    </div>
-  );
-}
-```
-
-`web/src/routes/Dashboard.tsx`:
-
-```tsx
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
-
-export default function Dashboard() {
-  const [me, setMe] = useState<{ email: string; role: string } | null>(null);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    api.me().then(setMe).catch(() => navigate('/login'));
-  }, [navigate]);
-
-  if (!me) return <p>Loading…</p>;
-
-  return (
-    <div style={{ padding: 24 }}>
-      <h1>Dashboard</h1>
-      <p>Logged in as {me.email} ({me.role})</p>
-      <button onClick={() => { api.setToken(null); navigate('/login'); }}>
-        Logout
-      </button>
-    </div>
-  );
-}
-```
-
----
-
-## Step 14: Run the migrations and start
-
-```bash
-cd web-app
-
-# Generate the first migration from your schema
-bun run db:generate
-
-# Apply it (creates db.sqlite with the users table)
-bun run db:migrate
-```
-
-You should now see `web-app/db.sqlite` and a `drizzle/` folder with the migration SQL.
-
----
-
-## Step 15: Run in development
-
-Open **two terminals**:
-
-```bash
-# Terminal 1 — Hono API on :3000
-cd web-app
-bun run dev
-```
-
-```bash
-# Terminal 2 — Vite SPA on :5173 (proxies /api to :3000)
-cd web-app/web
-bun run dev
-```
-
-Visit `http://localhost:5173`. The Vite dev server proxies all `/api/*` calls to Hono, so React Router and HMR work normally.
-
----
-
-## Step 16: Production build
-
-```bash
-cd web-app
-bun run build
-NODE_ENV=production bun run start
-```
-
-Hono now serves both the API (`/api/*`) and the built React SPA from `web/dist` at `http://localhost:3000`, with proper SPA fallback for `react-router-dom`.
-
----
-
-## What you've got
-
-- ✅ Hono running on Bun at `web-app/`
-- ✅ React + Vite + react-router-dom at `web-app/web/`
-- ✅ SQLite at `web-app/db.sqlite` via Bun's native driver + Drizzle
-- ✅ JWT auth using Hono's built-in JWT + Bun's built-in password hashing
-- ✅ User table with role-based middleware (`authMiddleware`, `requireRole`)
-- ✅ Vite dev proxy in dev, single-server hosting in prod
-- ✅ SPA fallback so React Router routes like `/dashboard` work on refresh
-
-## Recommended next steps
-
-- Swap JWT-in-sessionStorage for **httpOnly cookies** for better security (Hono has `setCookie` helpers)
-- Add **CASL** or a roles/permissions table for finer-grained authz
-- Add **TanStack Query** in the frontend for caching API calls
-- Add a `shared/` package for types if this becomes a monorepo
-- Consider **Better-Auth** if you want OAuth, magic links, 2FA out of the box
-
-Want me to add any of these — httpOnly cookies, TanStack Query setup, or a shared types package?
+## About Refactor Labs
+
+Drift is built by **[Refactor Labs](https://refactorlab.com)** —
+production observability tooling for engineering teams that ship fast.
+We open-source the agents and analyzers so you can audit them, run them
+without us, and ship their output anywhere.
+
+Found a bug? Have a feature request?
+[Open an issue](https://github.com/refactorlab/drift/issues).
