@@ -85,7 +85,7 @@ Every kwarg of `driftdockerprofiler.start()`:
 | ------------------------- | --------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `service`                 | `str`                             | `$GAE_SERVICE` / `$K_SERVICE` | **Required.** Logical name for the service being profiled. Must match `^[a-z0-9]([-a-z0-9_.]{0,253}[a-z0-9])?$`. Stamped on every event.                                                                                                             |
 | `service_version`         | `str` \| `None`                   | `$GAE_VERSION` / `$K_REVISION`| Optional version label. Useful for diffing profiles across releases.                                                                                                                                                                                 |
-| `output_path`             | `str` \| `None`                   | `/tmp/drift/events.jsonl`     | JSONL file the agent appends to. Parent directory is created if needed. Ignored when an explicit `sink` is passed.                                                                                                                                   |
+| `output_path`             | `str` \| `None`                   | `$DRIFT_OUTPUT_PATH` / `/tmp/drift/events.jsonl` | JSONL file the agent appends to. Resolution: kwarg → `DRIFT_OUTPUT_PATH` env var → `/tmp/drift/events.jsonl`. Parent directory is created if needed. Ignored when an explicit `sink` is passed or when Supabase auto-wiring kicks in.        |
 | `period_ms`               | `int`                             | `10`                          | Sampling interval in milliseconds.                                                                                                                                                                                                                   |
 | `duration_ms`             | `int`                             | `10_000`                      | Profile window length in milliseconds. One round of "sample for N ms, then emit" per type.                                                                                                                                                          |
 | `disable_cpu_profiling`   | `bool`                            | `False`                       | Skip CPU profiling (native SIGPROF sampler). Ignored on platforms where the C++ extension isn't built (macOS, Windows).                                                                                                                              |
@@ -95,7 +95,10 @@ Every kwarg of `driftdockerprofiler.start()`:
 | `pod`                     | `str` \| `None`                   | `$HOSTNAME` / `socket.gethostname()` | Per-host label stamped on every event. Useful when multiple replicas share a log destination.                                                                                                                                                  |
 | `builtin_exclude_paths`   | `tuple[str, ...]`                 | `BUILTIN_EXCLUDE_PATHS`       | Substring filter applied to each sample's leaf-frame `file`. Defaults drop the profiler observing itself + frozen importlib bootstrap. Pass `()` to fully disable.                                                                                  |
 | `exclude_paths`           | `tuple[str, ...]`                 | `()`                          | Additional user-supplied substrings stacked on top of the builtins. Common: `('/sqlalchemy/', '/celery/')`. Combine with `driftdockerprofiler.STRICT_USER_CODE_EXCLUDE_PATHS` to drop stdlib + site-packages too.                                    |
-| `sink`                    | `Sink` \| `None`                  | `None`                        | Pre-built sink (anything with `emit(event)` + `close()`). When `None`, the auto-wiring path is used: env-driven Supabase sink if both `SUPABASE_URL` and `SUPABASE_REALTIME_API_KEY` are set, otherwise a `JsonlFileSink(output_path)`.              |
+| `sink`                    | `Sink` \| `None`                  | `None`                        | Pre-built sink (anything with `emit(event)` + `close()`). When given, wins outright — the `supabase_*` kwargs / env vars below are ignored. When `None`, the auto-wiring path is used: see [Auto-wiring](#auto-wiring).                              |
+| `supabase_url`            | `str` \| `None`                   | `$SUPABASE_URL`               | Supabase project URL (e.g. `https://abc123.supabase.co`). Resolution: kwarg → `SUPABASE_URL` env var. When this + `supabase_api_key` both resolve and no explicit `sink` was passed, a `SupabaseRealtimeSink` is built instead of a file sink.       |
+| `supabase_api_key`        | `str` \| `None`                   | `$SUPABASE_REALTIME_API_KEY`  | Supabase API key — publishable (`sb_publishable_...`) or service_role JWT. Resolution: kwarg → `SUPABASE_REALTIME_API_KEY` env var. Required (with `supabase_url`) to enable broadcast mode.                                                          |
+| `supabase_channel`        | `str` \| `None`                   | `$SUPABASE_REALTIME_CHANNEL` / `drift-profiler-events` | Channel name joined as `realtime:<channel>`. Resolution: kwarg → `SUPABASE_REALTIME_CHANNEL` env var → `drift-profiler-events`.                                                                          |
 | `verbose`                 | `int`                             | `0`                           | Log level. 0=error, 1=warning, 2=info, 3=debug.                                                                                                                                                                                                       |
 
 ```python
@@ -115,9 +118,10 @@ All env vars the agent consults, in one place:
 | `GAE_VERSION`                  | Fallback for `service_version=`.                                                                          |
 | `K_REVISION`                   | Fallback for `service_version=`.                                                                          |
 | `HOSTNAME`                     | Fallback for `pod=`. Set by Docker / Kubernetes by default.                                              |
-| `SUPABASE_URL`                 | If set together with `SUPABASE_REALTIME_API_KEY`, auto-wires the WSS sink instead of writing to file.    |
-| `SUPABASE_REALTIME_API_KEY`    | Supabase publishable key (`sb_publishable_...`) or anon JWT. Used for socket auth + channel access token.|
-| `SUPABASE_REALTIME_CHANNEL`    | Channel name for the Supabase sink. Defaults to `drift-profiler-events`.                                  |
+| `DRIFT_OUTPUT_PATH`            | Fallback for `output_path=`. When set, redirects the default `JsonlFileSink` away from `/tmp/drift/events.jsonl`. Overridden by the `output_path` kwarg. Ignored when Supabase auto-wires. |
+| `SUPABASE_URL`                 | Fallback for `supabase_url=`. If both this and `SUPABASE_REALTIME_API_KEY` resolve (and no explicit `sink=` was passed), auto-wires the WSS sink instead of writing to file. |
+| `SUPABASE_REALTIME_API_KEY`    | Fallback for `supabase_api_key=`. Supabase publishable key (`sb_publishable_...`) or anon JWT. Used for socket auth + channel access token.|
+| `SUPABASE_REALTIME_CHANNEL`    | Fallback for `supabase_channel=`. Channel name for the Supabase sink. Defaults to `drift-profiler-events`.                                  |
 
 A copy of these for local dev lives in
 [`drift-observability/.env.example`](../.env.example).
@@ -142,9 +146,31 @@ class implementing the `Sink` protocol; no other file changes.
 
 If you don't pass `sink=` explicitly, the agent picks:
 
-1. `SupabaseRealtimeSink` — if both `SUPABASE_URL` and
-   `SUPABASE_REALTIME_API_KEY` env vars are present.
-2. `JsonlFileSink(output_path)` — otherwise (back-compat default).
+1. **`SupabaseRealtimeSink`** — if both `supabase_url` *and*
+   `supabase_api_key` resolve. Each resolves in this order:
+   explicit kwarg → environment variable
+   (`SUPABASE_URL` / `SUPABASE_REALTIME_API_KEY`).
+   `supabase_channel` adds a third fallback to
+   `drift-profiler-events`.
+2. **`JsonlFileSink(output_path)`** — otherwise (back-compat
+   default).
+
+An explicit `sink=` kwarg always wins outright — when present, every
+`supabase_*` kwarg and the matching env vars are ignored.
+
+### Supabase via kwargs (no env vars)
+
+```python
+driftdockerprofiler.start(
+    service='my-service',
+    supabase_url='https://abc123.supabase.co',
+    supabase_api_key='sb_publishable_...',
+    supabase_channel='prod-events',          # optional
+)
+```
+
+Equivalent to setting `SUPABASE_URL` / `SUPABASE_REALTIME_API_KEY` /
+`SUPABASE_REALTIME_CHANNEL` in the environment.
 
 ### Explicit Tee example
 
@@ -273,9 +299,17 @@ driftdockerprofiler.start(
 
 ## Event format
 
-Every line of the output file is one JSON object. Four shapes,
-distinguished by top-level `type`: `wall_trace`, `cpu_trace`,
-`wall_profile`, `cpu_profile`.
+Every line of the output file is one JSON object. Six shapes,
+distinguished by top-level `type`:
+
+| `type`             | Emitted by                                            | One per…                  |
+| ------------------ | ----------------------------------------------------- | ------------------------- |
+| `profile_metadata` | `Client.start()` (once per session, first line)       | session                   |
+| `wall_trace`       | Wall sampler in `emit_mode='per_trace'`               | unique stack per window   |
+| `cpu_trace`        | CPU sampler in `emit_mode='per_trace'`                | unique stack per window   |
+| `wall_profile`     | Wall sampler in `emit_mode='bundle'`                  | window                    |
+| `cpu_profile`      | CPU sampler in `emit_mode='bundle'`                   | window                    |
+| `function_call`    | `@driftdockerprofiler.trace`-decorated function       | call                      |
 
 Full schema, common fields, per-mode extras, and reader recipes
 (`jq`, `tail -F`, SSE relay) live in
@@ -303,7 +337,16 @@ with open('/tmp/drift/events.jsonl') as f:
 | **macOS** (Intel + Apple Silicon) | ❌  | ✅           | Wall sampler only — SIGPROF on Darwin is too limited.                |
 | **Windows**              | ❌          | ❌           | `start()` raises `NotImplementedError`. PRs welcome.                  |
 
-Python: **3.7 – 3.13**.
+Python: **3.7 – 3.14**.
+
+- 3.7 – 3.12 on Linux → platform wheel with the C++ SIGPROF CPU
+  sampler baked in.
+- 3.13 + 3.14 → universal `py3-none-any` wheel, wall sampler only.
+  CPython 3.13 removed `PyThreadState->cframe` and renamed
+  `_PyInterpreterFrame->f_code`, both of which the signal-safe stack
+  walker dereferences directly; 3.14 took `_PyInterpreterFrame`
+  opaque. `cpu_profiling_available()` returns `False` and callers
+  degrade gracefully.
 
 ---
 
@@ -411,40 +454,9 @@ and follows this contract:
      [`cibuildwheel`](https://cibuildwheel.pypa.io/).
    - Builds the source distribution (`sdist`).
    - Publishes to PyPI via **OIDC trusted publisher** (no API token
-     needed once configured — see [one-time setup](#one-time-pypi-setup)).
+     stored in GitHub secrets).
    - Pushes the tag `drift-profiler-python-v<x.y.z>` and attaches all
      artifacts to a GitHub Release.
-
-### One-time PyPI setup
-
-You only do this once per project. After it's done, every release is
-just a version bump + push to `main`.
-
-1. Go to **[https://pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/)**.
-2. Click **Add a new pending publisher** (use this if the project
-   doesn't yet exist on PyPI) or open your existing project and pick
-   **Publishing → Add a trusted publisher → GitHub**.
-3. Fill in:
-   - **PyPI Project Name**: `drift-docker-profiler`
-   - **Owner**: `refactorlab`
-   - **Repository name**: `drift`
-   - **Workflow name**: `drift-profiler-python-release.yml`
-   - **Environment name**: `pypi`
-4. Save. That's it — no API tokens stored in GitHub secrets.
-
-You also need to create the **`pypi` environment** on the GitHub side
-once: GitHub repo → **Settings → Environments → New environment** →
-name it `pypi`. Optionally restrict deployments to the `main` branch
-under "Deployment branches" — this is the layer that keeps a
-maintainer who can merge to feature branches from accidentally
-shipping a release.
-
-If you'd rather use a classic API token (e.g. your org disables
-OIDC), generate a project-scoped token at
-[https://pypi.org/manage/account/token/](https://pypi.org/manage/account/token/)
-and add it to **GitHub repo → Settings → Secrets → Actions** as
-`PYPI_API_TOKEN`. Then in the workflow's `publish` job, replace the
-OIDC config with `password: ${{ secrets.PYPI_API_TOKEN }}`.
 
 ### Manual local publish (escape hatch)
 
