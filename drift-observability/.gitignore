@@ -45,3 +45,7 @@ tilt_modules/
 .DS_Store
 
 .venv-drift
+drift-profiler-python/dist-py314
+drift-profiler-python/wheelhouse*
+drift-profiler-python/events.log
+drift-profiler-python/build

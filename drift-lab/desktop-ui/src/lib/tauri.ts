@@ -400,6 +400,28 @@ export interface AppConfig {
    *  runtime, but is marked optional for forward-compat across future Rust
    *  rollbacks. */
   scanFilters: ScanFilters;
+  /** Global Supabase Realtime defaults (Phase B). Per-scan overrides live
+   *  in the Active Scan page's local state. The API key itself is NEVER in
+   *  this struct — it lives in SecretStore under
+   *  `SECRET_KEYS.supabaseRealtimeApiKey`. */
+  realtime: RealtimeConfig;
+}
+
+/** Global Supabase Realtime defaults. Mirrors the env-var names the Python
+ *  publisher (`drift-profiler-python/.../sinks/supabase.py`) reads, so a
+ *  `.env` copy-paste needs zero translation. */
+export interface RealtimeConfig {
+  /** Supabase project URL, e.g. `https://abc123.supabase.co`. */
+  url: string;
+  /** Default channel name. Pre-fills the channel field on every new scan.
+   *  Empty string falls back to the Python publisher's default
+   *  `drift-profiler-events`. */
+  defaultChannel: string;
+  /** Default `payload.event` filter (`profiler-event` in the publisher
+   *  default). Empty string accepts all inner event names. */
+  defaultEvent: string;
+  /** Default frame-filter DSL input (Phase E). Empty = no filter. */
+  defaultFrameFilter: string;
 }
 
 export interface ScanFilters {
@@ -460,6 +482,226 @@ export async function updateScanFilters(
   return invoke<ScanFilters>("update_scan_filters", { filters });
 }
 
+// ---------------------------------------------------------------------------
+// Secrets — write-only from the renderer (Phase A).
+//
+// `setSecret` writes a value to the persistent secrets store.
+// `secretStatus` returns whether a key is configured. The value is NEVER
+// returned to JS: a UI XSS bug can't leak the JWT because the value doesn't
+// cross the IPC boundary in that direction. Server-side Rust tasks (e.g. the
+// Supabase Realtime subscriber) read the value directly from the same store.
+// ---------------------------------------------------------------------------
+
+/** Stable secret-store keys used across the UI. Centralised so a rename is
+ *  a one-line change, not a grep-and-replace. */
+export const SECRET_KEYS = {
+  supabaseRealtimeApiKey: "supabase_realtime_api_key",
+} as const;
+
+export async function setSecret(key: string, value: string): Promise<void> {
+  return invoke<void>("set_secret", { key, value });
+}
+
+export async function secretStatus(key: string): Promise<boolean> {
+  return invoke<boolean>("secret_status", { key });
+}
+
+// ---------------------------------------------------------------------------
+// Realtime config + connection test (Phase B).
+// ---------------------------------------------------------------------------
+
+/** Persist the global Supabase Realtime defaults. Mirrors
+ *  `updateScanFilters`'s shape — returns the saved value so the UI can
+ *  reconcile against the canonical Rust state if any field was normalised
+ *  server-side. */
+export async function updateRealtimeConfig(
+  realtime: RealtimeConfig,
+): Promise<RealtimeConfig> {
+  return invoke<RealtimeConfig>("update_realtime_config", { realtime });
+}
+
+/** Result of `testRealtimeConnection` — green tick / red cross + reason. */
+export interface TestConnectionResult {
+  ok: boolean;
+  message: string;
+}
+
+/** Optional overrides for a single test. Any field left `null` (or sent
+ *  as an empty string) falls through to the saved value: URL from
+ *  AppConfig, JWT from SecretStore, channel from the saved default →
+ *  publisher default. Lets Settings (full overrides) and LiveScan (no
+ *  overrides — just use what's saved) share one command. */
+export interface TestRealtimeInputs {
+  supabaseUrl?: string | null;
+  apiKey?: string | null;
+  channel?: string | null;
+}
+
+/** One-shot connect+join test. `testId` is a renderer-generated UUID
+ *  used by {@link cancelRealtimeTest} to stop an in-flight test (e.g.
+ *  the user clicks Stop while we're still waiting for `phx_reply`).
+ *
+ *  The Rust side enforces a 5 s wall-clock budget and emits per-stage
+ *  progress on `realtime://test_progress` (subscribe via
+ *  {@link onTestRealtimeProgress}). */
+export async function testRealtimeConnection(
+  testId: string,
+  inputs: TestRealtimeInputs = {},
+): Promise<TestConnectionResult> {
+  return invoke<TestConnectionResult>("test_realtime_connection", {
+    testId,
+    supabaseUrl: inputs.supabaseUrl ?? null,
+    apiKey: inputs.apiKey ?? null,
+    channel: inputs.channel ?? null,
+  });
+}
+
+/** Cancel an in-flight test by its `testId`. Idempotent — returns
+ *  `false` if no test by that id is currently running (already
+ *  completed, never started, or already cancelled). */
+export async function cancelRealtimeTest(testId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_realtime_test", { testId });
+}
+
+/** Per-stage progress emitted by the Rust side during a connect-test. The
+ *  `stage` token is machine-readable; `label` is the human string ready
+ *  to drop into the button text. */
+export interface TestProgressPayload {
+  stage: "connecting" | "joining" | "awaiting_reply";
+  label: string;
+}
+
+/** Subscribe to `realtime://test_progress`. Returns an unlisten function.
+ *  Call this while a test is in flight so the button label can switch
+ *  from "Testing…" to "Connecting…" → "Joining channel…" → "Awaiting
+ *  reply…" — that way a slow step doesn't look like a hang. */
+export async function onTestRealtimeProgress(
+  cb: (p: TestProgressPayload) => void,
+): Promise<() => void> {
+  return listen<TestProgressPayload>("realtime://test_progress", cb);
+}
+
+// ---------------------------------------------------------------------------
+// Realtime profile CRUD (PR-2a)
+// ---------------------------------------------------------------------------
+
+/** One saved realtime configuration. Created by `saveRealtimeProfile`,
+ *  read back by `listRealtimeProfiles`. The API key is NEVER on this
+ *  struct — it lives in the per-profile SecretStore slot. The
+ *  renderer never reads keys; it presence-checks via `secretStatus`. */
+export interface RealtimeProfile {
+  id: string;
+  name: string;
+  url: string;
+  channel: string;
+  eventName: string;
+  frameFilter: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Container for the user's profiles + which one is active. The
+ *  backend performs a one-time migration of the legacy single-record
+ *  config the first time `listRealtimeProfiles` runs — pre-PR-2a users
+ *  see their old data appear as a profile named "default". */
+export interface RealtimeSettings {
+  profiles: RealtimeProfile[];
+  activeProfileId: string | null;
+}
+
+/** Input shape for `saveRealtimeProfile`. `id` null = create; non-null
+ *  = update. `apiKey` is optional: null/undefined/empty means "leave
+ *  whatever key is currently saved for this profile alone". A
+ *  non-empty value is written to the namespaced SecretStore slot
+ *  derived from this profile's id. */
+export interface SaveProfileRequest {
+  id: string | null;
+  name: string;
+  url: string;
+  channel: string;
+  eventName: string;
+  frameFilter: string;
+  apiKey?: string | null;
+}
+
+export async function listRealtimeProfiles(): Promise<RealtimeSettings> {
+  return invoke<RealtimeSettings>("list_realtime_profiles");
+}
+
+export async function saveRealtimeProfile(
+  request: SaveProfileRequest,
+): Promise<RealtimeProfile> {
+  return invoke<RealtimeProfile>("save_realtime_profile", { request });
+}
+
+export async function deleteRealtimeProfile(id: string): Promise<boolean> {
+  return invoke<boolean>("delete_realtime_profile", { id });
+}
+
+/** Set the active profile. `null` clears it — LiveScan will then
+ *  refuse to start a stream until the user activates one. */
+export async function activateRealtimeProfile(
+  id: string | null,
+): Promise<void> {
+  return invoke<void>("activate_realtime_profile", { id });
+}
+
+/** SecretStore key name for a given profile's API key. Lets the
+ *  renderer presence-check (via `secretStatus(...)`) which profiles
+ *  have a JWT saved, without ever reading the value back. Mirrors
+ *  `namespaced_realtime_api_key_for` on the Rust side. */
+export function realtimeApiKeyName(profileId: string): string {
+  return `supabase_realtime_api_key:${profileId}`;
+}
+
+/** Handle returned by `startRealtimeEventStream` — carries both the WSS
+ *  stream id (for stopping) and the file-tail `liveScanId` (which the
+ *  existing `event_log://aggregate` payloads carry, so the chart can
+ *  match aggregates to this specific stream). */
+export interface RealtimeStreamHandle {
+  streamId: string;
+  liveScanId: string;
+  logPath: string;
+}
+
+/** Start streaming profiler events from a Supabase Realtime channel.
+ *
+ *  Scoping:
+ *   - `folderFingerprint` REQUIRED — the active session is bound to a
+ *      specific scanned folder. The backend refuses to start when the
+ *      folder has no prior static scan; that prereq guarantees we have
+ *      code references to join live samples against later.
+ *
+ *  Per-scan overrides:
+ *   - `channel`      — falls back to the active profile's channel,
+ *                      then to the publisher default `drift-profiler-events`.
+ *   - `eventFilter`  — falls back to the active profile's eventName.
+ *
+ *  The API key is NEVER passed as an argument — it's read server-side
+ *  from SecretStore (per-profile namespaced slot). Returns the WSS
+ *  stream id + the file-tail `liveScanId` (so the UI can correlate
+ *  aggregate payloads on `event_log://aggregate`). */
+export async function startRealtimeEventStream(
+  folderFingerprint: string,
+  channel: string | null,
+  eventFilter: string | null,
+): Promise<RealtimeStreamHandle> {
+  return invoke<RealtimeStreamHandle>("start_realtime_event_stream", {
+    folderFingerprint,
+    channel,
+    eventFilter,
+  });
+}
+
+/** Stop a realtime stream. Cancels both the WSS task and the underlying
+ *  file-tail aggregator in one shot. Idempotent (returns false if the id
+ *  is unknown). */
+export async function stopRealtimeEventStream(
+  streamId: string,
+): Promise<boolean> {
+  return invoke<boolean>("stop_realtime_event_stream", { streamId });
+}
+
 export async function testProvider(config: ModelBackendConfig): Promise<void> {
   return invoke<void>("test_provider", { config });
 }
@@ -514,6 +756,53 @@ export async function listModelsFromEndpoint(
     baseUrl,
     apiKey: apiKey || null,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Folder registry — the unit of "what's been scanned".
+//
+// Both static scans and active realtime sessions are scoped to a folder,
+// keyed by a stable 16-char hex fingerprint derived from the absolute
+// path. The Home screen browses folders; from a folder you launch either
+// a static scan or (if the folder has at least one static scan already)
+// an active scan. Old "flat list of scan files" workflows have been
+// replaced by this folder-first model.
+// ---------------------------------------------------------------------------
+
+/** One folder the user has scanned (or registered as a future scan
+ *  target). Derived from `~/.drift/scans/*.meta.json` on the Rust side —
+ *  no separate manifest to keep in sync. */
+export interface ScannedFolder {
+  /** 16-char hex; stable across re-scans of the same path. */
+  fingerprint: string;
+  /** Absolute path captured at scan time. May or may not still exist. */
+  path: string;
+  language: string | null;
+  /** ISO-8601 of the most recent static-scan meta, if any. */
+  lastStaticScanAt: string | null;
+  /** ISO-8601 of the most recent realtime log mtime, if any. */
+  lastActiveScanAt: string | null;
+  staticScanCount: number;
+}
+
+/** List every folder that has either a static scan or registered
+ *  placeholder. Ordered most-recently-touched first. */
+export async function listScannedFolders(): Promise<ScannedFolder[]> {
+  return invoke<ScannedFolder[]>("list_scanned_folders");
+}
+
+/** Register a folder by path so it appears in `listScannedFolders()`
+ *  even before any static scan has run. Returns the fingerprint.
+ *  Idempotent — calling twice on the same path is fine. */
+export async function registerFolder(path: string): Promise<string> {
+  return invoke<string>("register_folder", { path });
+}
+
+/** Has this folder ever been statically scanned? Active Scan refuses to
+ *  start when this returns false — the static scan is the prerequisite
+ *  for joining live samples back to code references. */
+export async function folderHasStaticScan(fingerprint: string): Promise<boolean> {
+  return invoke<boolean>("folder_has_static_scan", { fingerprint });
 }
 
 // ---------- Auto-update ----------
@@ -1140,6 +1429,32 @@ export interface EventLogTreeNode {
   file: string | null;
   line: number | null;
   children: EventLogTreeNode[];
+
+  // ---- Phase F3 join keys ------------------------------------------------
+  //
+  // Mirror the static profiler's `CallTreeNode` so a viewer can join a
+  // sampled tree against a static tree by `nodeId` and merge fields like
+  // `complexity` / `loc` / findings onto the matching sample node.
+  //
+  // Optional on the wire when the source events didn't carry F1a/F1b
+  // metadata (legacy events.log files, function_call-only streams without
+  // a real qualified name). The Rust side serializes with
+  // `skip_serializing_if = "Option::is_none"`, so absent → undefined in TS.
+
+  /** Stable id matching the static profiler's `CallTreeNode.id` format
+   *  (`file::class::name`). Always populated; falls back to `file::name`
+   *  when no class info is known. */
+  nodeId: string;
+  /** Fully-qualified Python name, e.g. `OrderService.create`. Sourced
+   *  from F1b's `qualified_name`; absent on Python 3.7-3.10. */
+  qualname?: string;
+  /** Containing module, e.g. `orders.service`. Sourced from F1b's
+   *  `module`. */
+  module?: string;
+  /** True iff the agent-skip filter classifies this frame as
+   *  stdlib / runtime / profiler-self. Mirrors F1a's `is_system`
+   *  on the source frame. */
+  isSystem?: boolean;
 }
 
 /** Full snakeviz-style report. */

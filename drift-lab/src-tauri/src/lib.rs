@@ -8,6 +8,15 @@ mod db;
 mod docker;
 pub mod event_log;
 mod event_log_commands;
+mod event_log_to_profile;
+mod event_source_commands;
+/// Folder identity + registry. Both static scans and active realtime
+/// sessions are scoped to a `FolderFingerprint` so the two paths can
+/// be joined later. See `folder/mod.rs` for the rationale.
+pub mod folder;
+mod folder_commands;
+#[allow(dead_code)] // Scaffolding for the sampled↔static profile join — wired into the viewer in a follow-up.
+mod fuzzy_join;
 pub mod events;
 mod history;
 mod http_server;
@@ -15,9 +24,16 @@ mod model_config;
 pub mod model_discovery;
 mod presets;
 pub mod patch;
+/// Supabase Realtime subsystem — domain / ports / adapters / use cases.
+/// The Tauri command shims that drive it live in `event_source_commands.rs`
+/// and `commands.rs`; everything in here is testable without a tauri
+/// runtime in sight.
+pub mod realtime;
 pub mod scan;
 mod scan_commands;
-#[allow(dead_code)] // Trait + file-backed impl. Kept as the swap path to a future KeychainSecretStore.
+/// Phase-A onwards: actively used. The trait stays public so a future
+/// `KeychainSecretStore` can replace `FileSecretStore` without touching
+/// commands or UI.
 mod secret_store;
 mod shutdown;
 mod state;
@@ -166,6 +182,16 @@ impl tracing::field::Visit for MessageVisitor {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
+    // Install the rustls CryptoProvider before ANY WSS connect runs.
+    // Without this, the first realtime test / subscribe panics in
+    // tokio_tungstenite and Tauri swallows the error — Test Connection
+    // "just does nothing" and the user blames the UI. Eager install at
+    // process boot means every downstream TLS user (transport, future
+    // reqwest clients, etc.) sees the same provider with no ordering
+    // hazard.
+    if let Err(e) = realtime::init() {
+        tracing::error!("realtime init failed: {e}");
+    }
     let mut builder = tauri::Builder::default()
         .manage(state::AppState::new())
         .plugin(tauri_plugin_dialog::init())
@@ -382,6 +408,31 @@ pub fn run() {
             event_log_commands::start_live_event_scan,
             event_log_commands::stop_live_event_scan,
             event_log_commands::download_event_log,
+            event_log_commands::export_static_profile_json,
+            // Secrets (write-only from the renderer; presence-check only).
+            commands::set_secret,
+            commands::secret_status,
+            // Folder registry — folders are the unit of "what's been
+            // scanned" and both static + active scans are scoped to
+            // them. See `folder/mod.rs`.
+            folder_commands::list_scanned_folders,
+            folder_commands::register_folder,
+            folder_commands::folder_has_static_scan,
+            // Realtime config + connection test (one unified, cancellable
+            // command for both Settings and Active Scan).
+            commands::update_realtime_config,
+            event_source_commands::test_realtime_connection,
+            event_source_commands::cancel_realtime_test,
+            // Realtime profile CRUD (PR-2a). New code uses these; the
+            // legacy `update_realtime_config` above stays one release
+            // for users still mid-migration.
+            event_source_commands::list_realtime_profiles,
+            event_source_commands::save_realtime_profile,
+            event_source_commands::delete_realtime_profile,
+            event_source_commands::activate_realtime_profile,
+            // Supabase Realtime subscriber (Phase C).
+            event_source_commands::start_realtime_event_stream,
+            event_source_commands::stop_realtime_event_stream,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

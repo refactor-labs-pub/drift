@@ -261,20 +261,18 @@ export default function HomePage() {
           </div>
 
           <div className="hint">
-            Press <kbd>Enter</kbd> to Make Magic.
+            Press <kbd>Enter</kbd> to Make Static Magic.
             {priorScans.length > 0 &&
               " Or pick where to resume from a previous scan on the right."}
           </div>
 
           <div className="home-secondary-row">
-            <button
-              type="button"
-              className="ghost-btn"
+            <RunButton
+              label="Make Active Magic"
               onClick={() => navigate("/live-scan")}
-              title="Open the events.log profiler — snakeviz-style icicle chart over any drift trace. Pick a past run, or tail a file live at ~1Hz."
-            >
-              ⏵ live_scan · profile an events.log
-            </button>
+              subText="Live profiler — stream events or open a saved log"
+              title="Open the active-scan page: live-tail profiler events from a Supabase Realtime channel, or aggregate a saved events.log into a snakeviz-style icicle chart."
+            />
           </div>
         </>
       )}

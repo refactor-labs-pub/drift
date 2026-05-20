@@ -20,7 +20,7 @@ interface Props {
 export default function RunButton({
   onClick,
   disabled,
-  label = "Make Magic",
+  label = "Make Static Magic",
   subText,
   title,
 }: Props) {

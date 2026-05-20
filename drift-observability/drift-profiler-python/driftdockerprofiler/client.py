@@ -61,19 +61,33 @@ client.py pulled in ~30 transitive packages).
 import atexit
 import logging
 import os
+import platform
 import re
 import socket
 import sys
 import threading
 import time
 import traceback
+import uuid
 
 from driftdockerprofiler import backoff
 from driftdockerprofiler import metrics
 from driftdockerprofiler import profiler_json
 from driftdockerprofiler import pythonprofiler
 from driftdockerprofiler import tracer
-from driftdockerprofiler.writer import JsonlWriter, frames_to_dicts
+# Single source of truth for filtering / exclude rules — see
+# `filters.py` module docstring for the layering diagram. Re-exported
+# below for back-compat with code that imports the constants from
+# `driftdockerprofiler.client`.
+from driftdockerprofiler.filters import (
+    BUILTIN_EXCLUDE_PATHS,
+    STRICT_USER_CODE_EXCLUDE_PATHS,
+    TraceFilter,
+    is_system_frame as _is_system_frame,
+)
+from driftdockerprofiler.sampling import wall_all_threads
+from driftdockerprofiler.sinks import JsonlFileSink, Sink
+from driftdockerprofiler.writer import frames_to_dicts
 
 # pylint: disable=g-import-not-at-top
 if sys.platform.startswith('linux'):
@@ -100,64 +114,89 @@ _NANOS_PER_SEC = 1000 * 1000 * 1000
 # Same service-name regex upstream uses.
 _SERVICE_RE = re.compile(r'^[a-z0-9]([-a-z0-9_.]{0,253}[a-z0-9])?$')
 
+
+def _sink_label(sink):
+  """Human-readable identifier for any Sink-protocol object.
+
+  The startup log line wants to say *where events are going*. Each
+  sink type names that target differently:
+
+    - `JsonlFileSink` / `JsonlWriter` → on-disk path (`.path`).
+    - `SupabaseRealtimeSink`          → redacted WSS URL (`.safe_url`).
+    - `TeeSink`                       → recursive list of children.
+    - anything else (custom / test doubles) → its class name.
+
+  Falls back to the class name when no known attribute is present, so
+  third-party sinks never break the start-up log.
+  """
+  for attr in ('path', 'safe_url'):
+    value = getattr(sink, attr, None)
+    if value is not None:
+      return str(value)
+  children = getattr(sink, 'sinks', None)
+  if children is not None:
+    return 'TeeSink[%s]' % ', '.join(_sink_label(c) for c in children)
+  return type(sink).__name__
+
 # Output discriminator. Upstream had no equivalent — it always produced
 # one pprof-binary per profile window.
 _EMIT_MODES = ('per_trace', 'bundle')
 
-# Exclude paths come in two layers, both substring-matched against each
-# leaf frame's `file`:
+# Wall-clock sampling strategies. Both produce {trace: count} dicts in
+# the same shape; they differ in which threads they observe:
 #
-#   1. BUILTIN_EXCLUDE_PATHS — minimal "always filter this" defaults.
-#      Only covers pure noise: the profiler observing itself, plus
-#      frozen importlib bootstrap. Override with
-#      `config(builtin_exclude_paths=...)` (pass `()` to fully
-#      disable).
+#   'all_threads' (default) — daemon thread + sys._current_frames(),
+#                             covers EVERY Python thread. Required to
+#                             see code that runs on uvicorn / gunicorn
+#                             threadpool workers, Django WSGI workers,
+#                             loop.run_in_executor, etc. This is the
+#                             dd-trace-py / Sentry / Pyroscope shape.
 #
-#   2. `exclude_paths` (user-supplied) — ADDITIVE extras stacked on
-#      top of the builtins. The common case is "use the defaults plus
-#      my own patterns", e.g. `exclude_paths=('/sqlalchemy/',)`.
+#   'signal'                — legacy upstream behaviour: SIGALRM +
+#                             ITIMER_REAL. Main thread only. Kept for
+#                             back-compat and for niche cases where
+#                             ALL request work runs on the main thread
+#                             (single-worker gunicorn sync workers).
 #
-#   For "only my code" — the most aggressive preset — combine the
-#   builtins with `STRICT_USER_CODE_EXCLUDE_PATHS` (defined below) to
-#   also drop stdlib + site-packages. Done deliberately, not by
-#   default: dropping stdlib turns the icicle chart EMPTY for code
-#   that hasn't been decorated with `@trace`, because the sampler's
-#   leaf frames are almost always inside asyncio / framework code.
-#
-# Final filter list = `builtin_exclude_paths + exclude_paths`. A leaf
-# matches if its file contains ANY substring in the combined list.
-#
-# Every production sampler does this in some form: py-spy has
-# `--exclude`, GCP has the agent-skip filter.
-BUILTIN_EXCLUDE_PATHS = (
-    # The profiler observing itself — pure noise. The polling thread
-    # is on-CPU exactly when SIGPROF fires it; the captured stack is
-    # profiler internals.
-    '/driftdockerprofiler/',
-    '/_profiler.cpython',         # the compiled C++ extension's .so
+# Default is 'all_threads' because the SIGALRM strategy silently misses
+# user code in every popular web stack — the most common production
+# deployment pattern. Users who specifically want the legacy shape
+# pass `wall_strategy='signal'`.
+_WALL_STRATEGIES = ('all_threads', 'signal')
 
-    # Frozen importlib bootstrap — appears as `<frozen importlib._bootstrap>`
-    # and `<frozen importlib._bootstrap_external>` in tracebacks. Always
-    # noise; no actionable user signal.
-    '<frozen ',
-)
+# Exclude / filter rules live in `driftdockerprofiler.filters` —
+# imported at the top of this file as `BUILTIN_EXCLUDE_PATHS`,
+# `STRICT_USER_CODE_EXCLUDE_PATHS`, `_SYSTEM_PATH_PREFIXES`,
+# `TraceFilter`, `_is_system_frame`. See that module's docstring for
+# the two-layer "thread-name skip at sample time, file-path filter at
+# emit time" architecture. This module is the consumer side: Client
+# constructs a `TraceFilter` at config() and applies it at
+# _write_window().
 
-# Strictly-only-user-code preset. Users who want "show me ONLY my code"
-# pass this (or augment it) via `exclude_paths=`. Kept out of the
-# defaults because dropping stdlib + site-packages turns the icicle
-# chart empty in apps that haven't decorated their hot methods with
-# `@trace` — the sampler events all leaf in framework code.
-#
-# Usage::
-#
-#     driftdockerprofiler.start(
-#         service='svc',
-#         exclude_paths=driftdockerprofiler.STRICT_USER_CODE_EXCLUDE_PATHS,
-#     )
-STRICT_USER_CODE_EXCLUDE_PATHS = (
-    '/lib/python3.',     # Python stdlib (catches /usr/lib, /usr/local/lib, venvs)
-    '/site-packages/',   # third-party packages (fastapi, uvicorn, etc.)
-)
+
+def _agent_version():
+  """Return the running agent's version string for the F2
+  ``profile_metadata`` Generator block. Lazy-imported so a malformed
+  ``__version__`` module doesn't fail import of the rest of the
+  client; a blank string is preferable to crashing the agent at
+  start-up over a labelling field.
+  """
+  try:
+    from driftdockerprofiler import __version__ as version_mod
+    return getattr(version_mod, '__version__', '') or ''
+  except Exception:  # pragma: no cover - defensive
+    return ''
+
+
+def _now_iso():
+  """ISO-8601 UTC timestamp at microsecond precision, ending in 'Z'.
+  Same shape ``JsonlWriter._ns_to_iso`` produces — re-uses the
+  writer's helper rather than duplicating the format string so
+  there's a single source of truth for our timestamp format.
+  """
+  from driftdockerprofiler.writer import _ns_to_iso
+  return _ns_to_iso(time.time_ns())
+
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +219,27 @@ class Client:
 
   def __init__(self):
     # Backoff state for `_create_profile` failures. Reset on success,
-    # advanced on failure. Same pattern upstream uses.
+    # advanced on failure. Same pattern upstream uses. Retained for
+    # back-compat with the legacy `_poll_profiler_service` (round-robin)
+    # method; the concurrent per-type polling threads each maintain
+    # their own local `backoff.Backoff()` so a transient failure in
+    # one profile type can't slow another down.
     self._backoff = backoff.Backoff()
     self._started = False
     self._profilers = None
     self._writer = None
     self._stop_event = threading.Event()
+    # Legacy single-thread handle — set to the LAST started thread for
+    # any external code that still introspects it. The authoritative
+    # list lives in `_polling_threads`. Kept so tests / subclasses
+    # that read `self._polling_thread` continue to compile.
     self._polling_thread = None
+    # One polling thread per profile type. Populated in start(),
+    # drained in stop(). Each thread runs `_poll_one_profiler` for
+    # one type continuously, so WALL + CPU sample concurrently
+    # instead of alternating — closes the "request fell into a
+    # CPU window" wall-sampling gap.
+    self._polling_threads = []
     self._atexit_registered = False
 
   def config(self,
@@ -200,21 +253,40 @@ class Client:
              pod=None,
              emit_mode='per_trace',
              builtin_exclude_paths=BUILTIN_EXCLUDE_PATHS,
-             exclude_paths=()):
+             exclude_paths=(),
+             sink=None,
+             wall_strategy='all_threads'):
     """Sets up the client config.
 
     Mirrors `googlecloudprofiler.Client.config` — the GCP-only args
     (`project_id`, `discovery_service_url`) are replaced with the
     local-sink kwargs (`output_path`, `duration_ms`, `emit_mode`).
 
+    Args of note (others mirror upstream verbatim):
+      output_path: Path the default JSONL sink writes to. Ignored when
+        `sink` is passed explicitly.
+      sink: Pre-built `Sink`-protocol object (anything with `emit(event)`
+        and `close()`). When given, replaces the default
+        `JsonlFileSink` — use for Supabase WSS streaming
+        (`SupabaseRealtimeSink`), fan-out to multiple destinations
+        (`TeeSink`), or test doubles. When `None` (default), a
+        `JsonlFileSink(output_path)` is built — fully backwards
+        compatible with the legacy `output_path`-only API.
+
     Raises:
       ValueError: If `service` can't be determined, doesn't match the
         regex, no profiling mode is enabled, period_ms / duration_ms
         non-positive, or emit_mode is unknown.
+      TypeError: If `sink` is provided but doesn't implement the Sink
+        protocol.
     """
     if emit_mode not in _EMIT_MODES:
       raise ValueError(
           'emit_mode must be one of %r, got %r' % (_EMIT_MODES, emit_mode))
+    if wall_strategy not in _WALL_STRATEGIES:
+      raise ValueError(
+          'wall_strategy must be one of %r, got %r' % (
+              _WALL_STRATEGIES, wall_strategy))
     if period_ms <= 0:
       raise ValueError('period_ms must be positive')
     if duration_ms <= 0:
@@ -222,7 +294,8 @@ class Client:
 
     self._profilers = {}
     self._config_cpu_profiling(disable_cpu_profiling, period_ms)
-    self._config_wall_profiling(disable_wall_profiling, period_ms)
+    self._config_wall_profiling(disable_wall_profiling, period_ms,
+                                wall_strategy)
     if not self._profilers:
       raise ValueError('No profiling mode is enabled.')
 
@@ -248,13 +321,30 @@ class Client:
     self._duration_ms = duration_ms
     self._duration_ns = duration_ms * 1_000_000
     self._emit_mode = emit_mode
-    # Two-layer filter: builtin defaults + user extras, concatenated.
-    # Both are normalised to tuples-of-strings so accidental list mutation
-    # by the caller doesn't surprise us.
-    _builtins = tuple(str(p) for p in builtin_exclude_paths) if builtin_exclude_paths else ()
-    _extras = tuple(str(p) for p in exclude_paths) if exclude_paths else ()
-    self._exclude_paths = _builtins + _extras
-    self._writer = JsonlWriter(output_path)
+    # All filter logic lives in `filters.TraceFilter` — single
+    # responsibility, single source of truth. We construct it here
+    # with the two-layer (builtin + user-extras) config and call it
+    # in `_write_window`. The `_exclude_paths` attribute below is
+    # kept for tests / external code that read it directly.
+    self._trace_filter = TraceFilter(
+        builtin_patterns=builtin_exclude_paths,
+        extra_patterns=exclude_paths,
+    )
+    self._exclude_paths = self._trace_filter.patterns
+    # Sink resolution — caller may pre-build any Sink-protocol object
+    # (TeeSink, SupabaseRealtimeSink, etc.) and inject it directly; if
+    # they don't, we build the same JsonlFileSink the legacy
+    # output_path path has always built. JsonlFileSink is just
+    # JsonlWriter under the new name, so existing tests that inspect
+    # `self._writer.path` / `self._writer.emitted` keep working.
+    if sink is not None:
+      if not isinstance(sink, Sink):
+        raise TypeError(
+            'sink must implement the Sink protocol (emit(event) + close()), '
+            'got %r' % (type(sink).__name__,))
+      self._writer = sink
+    else:
+      self._writer = JsonlFileSink(output_path)
     # Round-robin index for `_create_profile`. Upstream got the next
     # profile type from the server; we cycle locally.
     self._next_profile_idx = 0
@@ -279,12 +369,19 @@ class Client:
       return
 
     if 'WALL' in self._profilers:
-      if threading.current_thread() is not threading.main_thread():
-        raise RuntimeError(
-            'Client.start() must be called from the main thread when '
-            'WALL profiling is enabled (SIGALRM is only delivered to '
-            'the main thread on CPython)')
-      self._profilers['WALL'].register_handler()
+      wall = self._profilers['WALL']
+      # Only the SIGALRM strategy requires main-thread install.
+      # `WallAllThreadsSampler` sets `REQUIRES_MAIN_THREAD = False`;
+      # legacy `WallProfiler` doesn't define the attribute, so we
+      # default to True for safety.
+      if getattr(wall, 'REQUIRES_MAIN_THREAD', True):
+        if threading.current_thread() is not threading.main_thread():
+          raise RuntimeError(
+              'Client.start() must be called from the main thread when '
+              "wall_strategy='signal' (SIGALRM is only delivered to "
+              'the main thread on CPython). Use the default '
+              "wall_strategy='all_threads' to start from any thread.")
+      wall.register_handler()
 
     # Wire the deterministic-tracer module to our writer so any
     # `@trace`-decorated function call lands in the same JSONL stream
@@ -296,12 +393,47 @@ class Client:
         service_version=self._service_version,
     )
 
+    # Phase F2: emit a one-per-session header line that mirrors the
+    # static profiler's `profile.schema.json` Generator block. The
+    # emit happens BEFORE polling threads spawn so it's guaranteed to
+    # be the first JSONL line of the session — consumers reading the
+    # file linearly get `mode`/`generator`/`source_root` before any
+    # sample event arrives. Compatibility: any consumer that doesn't
+    # know the new `type` value already filters by `type` and will
+    # skip the line cleanly.
+    self._emit_profile_metadata()
+
     self._stop_event.clear()
-    self._polling_thread = threading.Thread(
-        target=self._poll_profiler_service)
-    self._polling_thread.name = 'Profiler API polling thread'
-    self._polling_thread.daemon = True
-    self._polling_thread.start()
+    # ONE polling thread PER profile type. Upstream googlecloudprofiler
+    # round-robins through types in a single thread (still implemented
+    # below as `_poll_profiler_service`, kept callable for back-compat),
+    # which means with both WALL and CPU configured each gets only ~50%
+    # of wall-clock coverage. A 5-second request landing in a CPU
+    # window is invisible to wall sampling. The per-type model below
+    # runs WALL and CPU concurrently so wall coverage is continuous —
+    # this is what dd-trace-py / Sentry / Pyroscope all do.
+    #
+    # Compatibility note: the C++ SIGPROF CPU sampler uses ITIMER_PROF,
+    # the legacy SIGALRM wall sampler uses ITIMER_REAL — different
+    # interval timers, no kernel-level conflict. The new
+    # `WallAllThreadsSampler` is pure-Python `sys._current_frames()`
+    # with no signals at all, so it stacks cleanly under either CPU
+    # path.
+    self._polling_threads = []
+    for profile_type in sorted(self._profilers.keys()):
+      t = threading.Thread(
+          target=self._poll_one_profiler,
+          args=(profile_type,),
+          name='driftdockerprofiler-' + profile_type.lower() + '-poller',
+          daemon=True,
+      )
+      t.start()
+      self._polling_threads.append(t)
+    # Legacy single-thread handle — point at the last thread started
+    # so any code that introspects `self._polling_thread` (subclasses,
+    # tests pre-Phase-3) still finds *something* live to look at.
+    self._polling_thread = (
+        self._polling_threads[-1] if self._polling_threads else None)
     # Upstream relied on `daemon=True` to die on process exit — but
     # that doesn't flush the writer. Register a shutdown so the
     # last window's events make it to disk.
@@ -313,27 +445,45 @@ class Client:
         'Profiler started: service=%s period_ms=%d duration_ms=%d '
         'output=%s profilers=%s emit_mode=%s',
         self._service, self._duration_ms, self._duration_ms,
-        self._writer.path, sorted(self._profilers), self._emit_mode)
+        _sink_label(self._writer), sorted(self._profilers),
+        self._emit_mode)
 
   def stop(self, timeout=None):
-    """Signal the polling thread to stop and join it. Idempotent.
+    """Signal every polling thread to stop and join each. Idempotent.
 
     Not in upstream — its daemon thread had no shutdown path. We need
     one because (a) the JsonlWriter holds a buffer that should flush
     on exit, and (b) tests need to tear down between cases.
 
-    The thread may be blocked inside `profiler.profile(duration_ns)`,
-    which is uninterruptible — the default `timeout` covers one full
-    window plus 2 seconds of slack.
+    Each polling thread may be blocked inside
+    `profiler.profile(duration_ns)`, which is uninterruptible — the
+    default `timeout` covers one full window plus 2 seconds of slack
+    PER THREAD (joined sequentially), so the worst-case total stop
+    latency scales with the number of configured profile types
+    (typically 1 or 2 — WALL, CPU).
     """
     if not self._started:
       return
     self._stop_event.set()
-    if self._polling_thread is not None:
-      if timeout is None:
-        timeout = (self._duration_ms / 1000.0) + 2.0
-      self._polling_thread.join(timeout=timeout)
-      self._polling_thread = None
+    if timeout is None:
+      # Each profile() call holds for at most one window. Cover it
+      # plus 2s of slack PER THREAD — they're joined sequentially.
+      per_thread_timeout = (self._duration_ms / 1000.0) + 2.0
+    else:
+      per_thread_timeout = timeout
+    # Join every per-type polling thread. Pre-Phase-3 there was at
+    # most one; we still handle that via the same iteration.
+    for t in self._polling_threads:
+      try:
+        t.join(timeout=per_thread_timeout)
+      except Exception:  # pylint: disable=broad-except
+        # join() shouldn't raise, but a hostile subclass could shim
+        # it. Match Google's "agent must never crash user code"
+        # invariant — log and move on.
+        logger.warning('Failed to join %s; continuing shutdown',
+                       t.name, exc_info=True)
+    self._polling_threads = []
+    self._polling_thread = None
     # Disable the deterministic tracer BEFORE closing the writer —
     # otherwise a @trace'd call from another thread mid-shutdown
     # could still try to emit to a closed handle.
@@ -351,6 +501,67 @@ class Client:
     except Exception:  # pylint: disable=broad-except
       pass
 
+  def _emit_profile_metadata(self):
+    """Phase F2: emit a one-per-session header line that mirrors the
+    static profiler's `profile.schema.json` Generator + top-level
+    fields. Lets a viewer reading the JSONL linearly know the
+    session's tool/version/host/source_root BEFORE any sample event
+    arrives — and identifies the file's `mode` as ``sampled`` so a
+    converter can output an exact `profile.schema.json` document.
+
+    Field shapes are byte-for-byte copies of the upstream Generator
+    struct so the Rust converter (Phase F4) is a trivial field copy.
+
+    Failures are swallowed: a broken writer at this single emit point
+    must not prevent the polling threads from coming up. The
+    JsonlWriter's own `emit()` already swallows OSError; this outer
+    try is defence-in-depth.
+    """
+    try:
+      python_version = '%d.%d.%d' % sys.version_info[:3]
+      event = {
+          'type': 'profile_metadata',
+          # `time` matches every other event's format — JsonlWriter
+          # rewrites int ns → ISO at emit time.
+          'time': time.time_ns(),
+          'service': self._service,
+          'pod': self._pod,
+          'mode': 'sampled',
+          # Mirrors `profile.schema.json::schema_version` enum.
+          # Bump if/when the dynamic-side wire format changes.
+          'schema_version': '1.0',
+          # Per-session UUID. Stays stable for every event that
+          # follows in this JSONL stream; lets a deployment-wide
+          # consumer that aggregates across many pods dedup samples
+          # from the same Python process restart.
+          'service_id': uuid.uuid4().hex,
+          'generator': {
+              'tool': 'driftdockerprofiler',
+              'version': _agent_version(),
+              # platform.node() is the most portable hostname source —
+              # works on Linux/macOS/Windows without env var fallbacks.
+              'host': platform.node() or self._pod,
+              # ISO timestamp of session start. Same instant as `time`
+              # above; this field exists so the Generator block is
+              # self-contained and a viewer can render it without
+              # cross-referencing the event envelope.
+              'captured_at': _now_iso(),
+              # `getcwd()` is what the static profiler also uses as
+              # `source_root` — same join key, no translation.
+              'source_root': os.getcwd(),
+              'language_versions': {'python': python_version},
+          },
+      }
+      if self._service_version:
+        event['service_version'] = self._service_version
+      self._writer.emit(event)
+    except Exception:  # pylint: disable=broad-except
+      # Don't let a header emit failure prevent profiling. Log loud
+      # because losing the header silently is its own problem (the
+      # converter won't have a Generator block).
+      logger.warning('failed to emit profile_metadata header: %s',
+                     traceback.format_exc())
+
   def _config_cpu_profiling(self, disable_cpu_profiling, period_ms):
     """Adds CPU profiler if supported and not disabled. Same as upstream."""
     cpu_profiling_supported = cpu_profiler is not None
@@ -362,11 +573,26 @@ class Client:
     else:
       self._profilers['CPU'] = cpu_profiler.CPUProfiler(period_ms)
 
-  def _config_wall_profiling(self, disable_wall_profiling, period_ms):
-    """Adds wall profiler if not disabled. Same as upstream."""
+  def _config_wall_profiling(self, disable_wall_profiling, period_ms,
+                             wall_strategy):
+    """Adds the wall profiler if not disabled.
+
+    Branches on `wall_strategy`:
+      'all_threads' — `WallAllThreadsSampler` (daemon thread +
+                      `sys._current_frames()`, covers every thread).
+      'signal'      — legacy `WallProfiler` (SIGALRM, main thread only).
+
+    Both implement the same protocol (`period_ns` + `profile(duration_ns)
+    → {trace: count}`), so the polling loop, filter, and writer paths
+    don't care which one is configured.
+    """
     if disable_wall_profiling:
       logger.info('Wall profiling is disabled by disable_wall_profiling')
-    else:
+      return
+    if wall_strategy == 'all_threads':
+      self._profilers['WALL'] = wall_all_threads.WallAllThreadsSampler(
+          period_ms)
+    else:  # 'signal' — validated by config()
       self._profilers['WALL'] = pythonprofiler.WallProfiler(period_ms)
 
   def _create_profile(self):
@@ -429,41 +655,22 @@ class Client:
           profile_type, traceback.format_exc())
 
   def _should_exclude(self, leaf_file):
-    """Return True iff `leaf_file` matches any configured exclude pattern.
+    """Thin delegate to `self._trace_filter.should_exclude`.
 
-    Called once per unique trace (not per sample) — a cheap substring
-    scan over a small fixed list (typically 2 entries). Profile-self
-    filtering is the primary use; users can extend the list to drop
-    stdlib, site-packages, or specific noisy modules.
+    Retained as an instance method so tests / subclasses that poke at
+    the legacy `client._should_exclude(file)` API keep working. The
+    real logic lives in `filters.TraceFilter`.
     """
-    if not self._exclude_paths:
-      return False
-    for pat in self._exclude_paths:
-      if pat and pat in leaf_file:
-        return True
-    return False
+    return self._trace_filter.should_exclude(leaf_file)
 
   def _filter_traces(self, traces):
-    """Drop traces whose leaf frame matches `exclude_paths`.
+    """Thin delegate to `self._trace_filter.filter`.
 
-    We filter on the LEAF (frames[0]) because that's "what code is
-    executing now" — if it's profiler internals, the entire stack is
-    noise. Deeper frames may legitimately route through filtered
-    paths on the way to user code; we don't drop those.
+    Retained as an instance method for the same reason as
+    `_should_exclude` — back-compat with code that calls the legacy
+    API. Filtering logic lives in `filters.TraceFilter`.
     """
-    if not self._exclude_paths:
-      return traces
-    filtered = {}
-    for trace, count in traces.items():
-      if not trace:
-        continue
-      leaf = trace[0]
-      # trace[0] is a (name, file, line) tuple.
-      leaf_file = leaf[1] if len(leaf) > 1 else ''
-      if self._should_exclude(leaf_file):
-        continue
-      filtered[trace] = count
-    return filtered
+    return self._trace_filter.filter(traces)
 
   def _write_window(self, profile_type, traces, window_end_ns):
     """Local-write equivalent of upstream's base64 + PATCH step.
@@ -513,7 +720,7 @@ class Client:
           'cpu': cpu,
           'memory_bytes': memory_bytes,
           'memory_peak_bytes': memory_peak_bytes,
-          'frames': frames_to_dicts(trace),
+          'frames': frames_to_dicts(trace, is_system_predicate=_is_system_frame),
       }
       if self._service_version:
         event['service_version'] = self._service_version
@@ -536,6 +743,7 @@ class Client:
         service_version=self._service_version,
         cpu=cpu,
         memory_bytes=memory_bytes,
+        is_system_predicate=_is_system_frame,
     )
     event = builder.to_dict()
     event['type'] = profiler_json.bundle_event_type(profile_type.lower())
@@ -543,6 +751,74 @@ class Client:
     # Bundle events also get the peak — keep parity with per_trace.
     event['memory_peak_bytes'] = memory_peak_bytes
     self._writer.emit(event)
+
+  def _poll_one_profiler(self, profile_type):
+    """Continuous polling loop scoped to ONE profile type.
+
+    Phase-3 successor to `_poll_profiler_service` (the legacy
+    round-robin loop, kept below for back-compat). One of these runs
+    per configured profile type, in its own daemon thread, so WALL
+    and CPU sample CONCURRENTLY instead of taking turns. That is what
+    gives wall sampling 100% wall-clock coverage even when the C++
+    SIGPROF CPU sampler is active — closing the "the request landed
+    in a CPU window so we missed it" gap from the original Google
+    design.
+
+    Loop shape is intentionally identical to upstream
+    `_poll_profiler_service` (try/except BaseException, per-call
+    `Backoff`, `stop_event.wait` interruptible sleep) so the
+    defensive properties carry over: a transient failure inside
+    `profile()` or the writer can never crash the daemon thread,
+    never stalls peer threads, and recovers with exponential backoff.
+
+    Args:
+      profile_type: 'WALL' or 'CPU' (case must match `self._profilers`
+        keys).
+    """
+    # PER-TYPE backoff state. Single Responsibility: this loop owns
+    # its own retry rhythm; a flapping CPU sampler can't slow WALL
+    # down, and vice versa. (Upstream had ONE shared `self._backoff`
+    # because there was ONE loop.)
+    local_backoff = backoff.Backoff()
+
+    # The "profile spec" upstream got from a CreateProfile RPC. We
+    # synthesize it locally and it never changes for this thread —
+    # build once.
+    duration_ns = self._duration_ms * 1_000_000
+    profile_spec = {
+        'profileType': profile_type,
+        'duration': {
+            'seconds': self._duration_ms // 1000,
+            'nanos': (self._duration_ms % 1000) * 1_000_000,
+        },
+        'name': 'local-' + profile_type.lower(),
+    }
+    logger.debug('Profiler %s polling thread started '
+                 '(continuous, duration_ns=%d)',
+                 profile_type, duration_ns)
+
+    while not self._stop_event.is_set():
+      try:
+        # `_collect_and_upload_profile` itself wraps `BaseException`
+        # (preserved verbatim from upstream). The outer try/except
+        # here is defence-in-depth — if the inner guard ever stops
+        # catching (refactor, signal handler reentry, etc.) we still
+        # never let an exception escape this thread.
+        self._collect_and_upload_profile(profile_spec)
+        local_backoff.reset()
+      except BaseException as e:  # pylint: disable=broad-except
+        backoff_duration = local_backoff.next_backoff(e)
+        logger.warning(
+            '[%s] poll loop hit an unhandled exception '
+            '(retry after %.3fs): %s',
+            profile_type, backoff_duration, str(e))
+        # `stop_event.wait` returns True if stop fired during the
+        # sleep — short-circuit so a full backoff window doesn't
+        # drag out shutdown.
+        if self._stop_event.wait(backoff_duration):
+          break
+
+    logger.debug('Profiler %s polling thread exiting', profile_type)
 
   def _poll_profiler_service(self):
     """Polls the (local) profile-spec generator. Forks upstream's

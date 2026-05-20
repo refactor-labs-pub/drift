@@ -5,3 +5,8 @@ uvicorn[standard]>=0.22,<0.23
 # pydantic v1 — fastapi 0.103.x is the last line that supports both v1
 # and v2; pinning v1 keeps the test app on a well-trodden combination.
 pydantic>=1.10,<2
+# Optional — only consumed when `SUPABASE_REALTIME_API_KEY` is set
+# and `driftdockerprofiler` builds a `SupabaseRealtimeSink`. Kept in
+# the test app's requirements (not the driftdockerprofiler wheel) so
+# the profiler itself stays dep-free.
+websocket-client>=1.6,<2

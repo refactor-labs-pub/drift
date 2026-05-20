@@ -48,7 +48,14 @@ RESET  := \033[0m
         test-export-driftdockerprofiler smoke-driftdockerprofiler \
         export-driftdockerprofiler-readme \
         images images-app images-obs \
-        e2e-driftdockerprofiler
+        e2e-driftdockerprofiler \
+        live-supabase-driftdockerprofiler
+
+# `live-supabase-driftdockerprofiler` reads SUPABASE_URL,
+# SUPABASE_REALTIME_API_KEY, SUPABASE_REALTIME_CHANNEL from
+# `drift-observability/.env` (gitignored — see `.env.example`).
+# The Python script does the loading; the Makefile target is just
+# a runner.
 
 ### Tier 1 (the ones you'll use)
 
@@ -127,7 +134,12 @@ test-cpp-driftdockerprofiler: ## Compile + run the C++ unit tests inside Docker 
 
 wheel-driftdockerprofiler: ## Quick local wheel build (still via Docker — C++ ext needs gcc/g++) → drift-profiler-python/dist/
 	@printf "$(BLUE)▶$(RESET) building driftdockerprofiler wheel via Docker ($(DRIFTDOCKER_BUILD_IMG))\n"
-	@cd $(DRIFTDOCKER_DIR) && rm -rf dist && mkdir -p dist && \
+	# mkdir BEFORE rm so the directory never disappears mid-build. Tilt
+	# can fire the test-python-web-server image build in parallel with
+	# this target; if `dist/` is briefly gone, Docker's COPY fails with
+	# `lstat /drift-profiler-python/dist: no such file or directory`.
+	# rm -f only the wheels keeps the directory itself stable.
+	@cd $(DRIFTDOCKER_DIR) && mkdir -p dist && rm -f dist/*.whl && \
 	  docker build --output type=local,dest=./dist --target wheel-export . ; \
 	  printf "$(GREEN)✓$(RESET) artifacts:\n" ; \
 	  ls -1 dist | sed 's/^/    /'
@@ -329,3 +341,14 @@ images-obs: ## Build observability-server:dev
 .PHONY: e2e-driftdockerprofiler
 e2e-driftdockerprofiler: wheel-driftdockerprofiler ## End-to-end smoke test: app + observability-server in docker, assert schema + C++ ext + SSE
 	@bash test-python-web-server/e2e/smoke_test.sh
+
+### Supabase Realtime — live (NOT a unit test, hits the network)
+
+# Opens a real WSS to your Supabase project, joins channel `drift-test`,
+# emits 10 synthetic profiler events, and (in a second WSS) subscribes
+# to the same channel so you SEE the round-trip on stdout. Requires
+# `websocket-client` — installs it into the user site on demand.
+live-supabase-driftdockerprofiler: ## Live round-trip to channel drift-test on Supabase (reads drift-observability/.env)
+	@python3 -c "import websocket, certifi" 2>/dev/null || \
+	  python3 -m pip install --quiet --user websocket-client certifi
+	@python3 $(DRIFTDOCKER_DIR)/scripts/live_supabase_realtime.py

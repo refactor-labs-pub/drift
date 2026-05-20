@@ -11,11 +11,12 @@ use uuid::Uuid;
 use crate::{
     agent::{self as agent_loop, Agent, TokenLimitParam},
     agent_tools::{self, Toolset},
-    app_config::{self, AppConfig, SavedProvider, ScanFilters},
+    app_config::{self, AppConfig, RealtimeConfig, SavedProvider, ScanFilters},
     backend,
     events::{topic, BackendStatus},
     history::{self, Conversation, ConversationSummary},
     model_config::ModelBackend,
+    secret_store::{FileSecretStore, SecretStore},
     state::AppState,
     workflow,
 };
@@ -608,6 +609,26 @@ pub async fn update_scan_filters<R: Runtime>(
     Ok(cfg.scan_filters)
 }
 
+/// Persist the global Supabase Realtime defaults. Delegates to the
+/// `UpdateSettingsUseCase`; this shim just wires the adapter and maps
+/// errors. The API key is NOT in this struct — it's saved separately
+/// via `set_secret`.
+#[tauri::command]
+pub async fn update_realtime_config<R: Runtime>(
+    realtime: RealtimeConfig,
+    state: State<'_, AppState>,
+    app: AppHandle<R>,
+) -> Result<RealtimeConfig, String> {
+    use crate::realtime::{
+        app::UpdateSettingsUseCase, infra::AppConfigSettingsRepository,
+    };
+    let repo = AppConfigSettingsRepository::new(app, std::sync::Arc::clone(&state.app_config));
+    UpdateSettingsUseCase::new(&repo)
+        .execute(realtime)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Probe a candidate provider config. Sends a 1-token request to verify the
 /// URL + key + model triple speaks the expected protocol. Each provider has
 /// its own quirks — auth header, token-limit field, body shape — so they
@@ -886,4 +907,45 @@ pub async fn get_current_conversation(
     state: State<'_, AppState>,
 ) -> Result<Option<Conversation>, String> {
     Ok(state.current_conv.lock().await.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Secrets (Phase A)
+//
+// The renderer can WRITE secrets (`set_secret`) and ask whether a secret is
+// configured (`secret_status`). It can NEVER read the value. Server-side
+// background tasks (the Supabase Realtime subscriber, etc.) read values
+// directly via `SecretStore::get` from a fresh `FileSecretStore`. This split
+// is the bulletproof guarantee — a UI XSS bug can't leak the JWT because the
+// JWT never crosses to JS in the first place.
+// ---------------------------------------------------------------------------
+
+/// Write a single secret (e.g. the Supabase Realtime API key) to the
+/// persistent secrets store. Idempotent: re-writing the same key replaces
+/// the value.
+///
+/// The renderer calls this from the Settings → Realtime tab's "Save" button.
+/// There is no matching `get_secret` Tauri command — values are read only
+/// from server-side Rust code that has the same `AppHandle`.
+#[tauri::command]
+pub async fn set_secret<R: Runtime>(
+    key: String,
+    value: String,
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    let store = FileSecretStore::new(app);
+    store.set(&key, &value).map_err(|e| e.to_string())
+}
+
+/// Return whether a secret is configured. The value is **never** returned —
+/// only its presence. Callers (the UI) use this to enable / disable
+/// dependent controls ("Listen Live" is enabled only when the Supabase key
+/// is set).
+#[tauri::command]
+pub async fn secret_status<R: Runtime>(
+    key: String,
+    app: AppHandle<R>,
+) -> Result<bool, String> {
+    let store = FileSecretStore::new(app);
+    Ok(store.get(&key).map_err(|e| e.to_string())?.is_some())
 }

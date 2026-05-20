@@ -129,11 +129,55 @@ def _now_ns():
   return time.time_ns()
 
 
-def frames_to_dicts(trace):
-  """Convert a tuple of (name, file, line) tuples to a list of dicts.
+def frames_to_dicts(trace, is_system_predicate=None):
+  """Convert a tuple of frame tuples to a list of dicts.
 
-  Both the wall profiler (Python) and CPU profiler (C++) produce
-  traces in this shape; the JSONL form is the same for both so
+  Both the wall profiler (Python) and CPU profiler (C++) feed frames
+  through this function; the JSONL form is the same for both so
   downstream consumers don't care which produced it.
+
+  Accepted input shapes — handled transparently:
+    - **3-tuple** ``(name, file, line)`` — the legacy shape; what the
+      C++ CPU sampler still emits, and what tests construct by hand.
+    - **5-tuple** ``(name, file, line, qualified_name, module)`` —
+      the Phase-F1b shape the all-threads / SIGALRM wall samplers
+      emit. ``qualified_name`` is ``''`` on Py < 3.11 where
+      ``co_qualname`` doesn't exist; ``module`` is the value of
+      ``frame.f_globals['__name__']`` or ``''`` if absent.
+
+  Phase F1a: when ``is_system_predicate`` is supplied — a callable
+  ``(file: str) -> bool`` — every emitted dict gains three extra
+  fields matching the static profiler's ``Frame`` schema:
+
+    - ``language``  always ``'python'`` for frames produced here
+    - ``is_native`` always ``False`` for pure-Python frames
+    - ``is_system`` ``True`` iff ``is_system_predicate(file)`` is truthy
+
+  Phase F1b: when the input is a 5-tuple, the emitted dict carries
+  the optional ``qualified_name`` and ``module`` fields. Empty
+  strings are dropped (the key is omitted) so older runtimes don't
+  emit ``"qualified_name": ""`` noise.
+
+  When the predicate is ``None`` AND the input is 3-tuples, the
+  output is byte-for-byte identical to pre-F1a. Existing call sites
+  that don't pass the predicate and feed legacy 3-tuples keep their
+  old behaviour exactly.
   """
-  return [{'name': f[0], 'file': f[1], 'line': f[2]} for f in trace]
+  out = []
+  for f in trace:
+    d = {'name': f[0], 'file': f[1], 'line': f[2]}
+    # Phase F1b: 5-tuple frames carry qualified_name + module.
+    # Empty strings → field absent (Py < 3.11 has no co_qualname;
+    # we want the JSON to reflect "not available" as missing key,
+    # not "" / null).
+    if len(f) >= 5:
+      if f[3]:
+        d['qualified_name'] = f[3]
+      if f[4]:
+        d['module'] = f[4]
+    if is_system_predicate is not None:
+      d['language'] = 'python'
+      d['is_native'] = False
+      d['is_system'] = bool(is_system_predicate(f[1]))
+    out.append(d)
+  return out

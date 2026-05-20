@@ -220,6 +220,38 @@ lint: check-rust ## Show all clippy warnings (forces re-check so cache can't hid
 	@cd $(TAURI_DIR) && cargo clean -p drift-lab --quiet 2>/dev/null || true
 	@cd $(TAURI_DIR) && cargo clippy --all-targets --color always
 
+# === Smoke tests =============================================================
+### Smoke tests
+
+# Standalone smoke test that exercises the SAME Rust transport
+# (`TungsteniteTransport`) the desktop app uses — no parallel
+# implementation, no Python, no Tauri. If this passes, the desktop's
+# "Test Connection" button will too. If it fails, you see the EXACT
+# failure (auth, DNS, channel rejected, silent timeout) without the
+# renderer or IPC in the way.
+#
+# Reads SUPABASE_URL + SUPABASE_REALTIME_API_KEY (+ optional
+# SUPABASE_REALTIME_CHANNEL) from a `.env` file at drift-lab/.env
+# (gitignored — covered by the repo-root `**/.env`). Sourced inline
+# below; no dotenv dependency needed.
+ENV_FILE := .env
+.PHONY: realtime-smoke
+realtime-smoke: ## Connect+join+leave test (+ optional N-second frame dump)
+	@if [ ! -f "$(ENV_FILE)" ]; then \
+		printf "$(YELLOW)!$(RESET) $(ENV_FILE) not found at $$(pwd)/$(ENV_FILE)\n"; \
+		printf "  Create it with:\n"; \
+		printf "    $(BLUE)SUPABASE_URL=$(RESET)https://abc123.supabase.co\n"; \
+		printf "    $(BLUE)SUPABASE_REALTIME_API_KEY=$(RESET)<your JWT>\n"; \
+		printf "    $(BLUE)SUPABASE_REALTIME_CHANNEL=$(RESET)drift-profiler-events  $(YELLOW)# optional$(RESET)\n"; \
+		printf "    $(BLUE)SUPABASE_REALTIME_LISTEN_SECONDS=$(RESET)15           $(YELLOW)# optional: dump frames$(RESET)\n"; \
+		exit 1; \
+	fi
+	@printf "$(BLUE)▶$(RESET) sourcing $(ENV_FILE) and running cargo example realtime_smoke\n"
+	@printf "$(YELLOW)hint:$(RESET) set SUPABASE_REALTIME_LISTEN_SECONDS=15 in $(ENV_FILE) to dump\n"
+	@printf "      every raw frame for 15s after the connect test passes.\n"
+	@set -a; . ./$(ENV_FILE); set +a; \
+		cd $(TAURI_DIR) && cargo run --quiet --example realtime_smoke
+
 # === Cleanup =================================================================
 ### Cleanup
 

@@ -1,38 +1,55 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import DockerSetupHint from "../components/DockerSetupHint";
 import Orbs from "../components/Orbs";
 import {
+  activateProvider,
+  activateRealtimeProfile,
   AppConfig,
   BackendStatus,
-  DiscoveredRuntime,
-  ModelBackendConfig,
-  ProviderPreset,
-  SavedProvider,
-  ScanFilters,
-  UpdateInfo,
-  UpdateProgress,
-  activateProvider,
   cachedLocalRuntimes,
+  cancelRealtimeTest,
   checkForUpdate,
   deleteProvider,
+  deleteRealtimeProfile,
+  DiscoveredRuntime,
   downloadAndInstallUpdate,
   getAppConfig,
   getAppVersion,
   getBackendStatus,
   listModelsFromEndpoint,
   listPresets,
+  listRealtimeProfiles,
+  ModelBackendConfig,
   onBackendStatus,
+  onTestRealtimeProgress,
   probeLocalRuntimes,
+  ProviderPreset,
+  realtimeApiKeyName,
+  RealtimeProfile,
+  RealtimeSettings,
   resetAllConfig,
+  SavedProvider,
   saveProvider,
+  saveRealtimeProfile,
+  ScanFilters,
+  secretStatus,
   testProvider,
+  testRealtimeConnection,
+  UpdateInfo,
+  UpdateProgress,
   updateScanFilters,
   withTimeout,
 } from "../lib/tauri";
 
-type Tab = "models" | "local" | "providers" | "scanning" | "updates";
+type Tab =
+  | "models"
+  | "local"
+  | "providers"
+  | "scanning"
+  | "realtime"
+  | "updates";
 
 export default function SettingsPage() {
   const navigate = useNavigate();
@@ -85,6 +102,9 @@ export default function SettingsPage() {
           <TabButton active={tab === "scanning"} onClick={() => switchTab("scanning")}>
             Scanning
           </TabButton>
+          <TabButton active={tab === "realtime"} onClick={() => switchTab("realtime")}>
+            Realtime
+          </TabButton>
           <TabButton active={tab === "updates"} onClick={() => switchTab("updates")}>
             Updates
           </TabButton>
@@ -101,6 +121,9 @@ export default function SettingsPage() {
         )}
         {config && tab === "scanning" && (
           <ScanningTab config={config} refresh={refresh} />
+        )}
+        {config && tab === "realtime" && (
+          <RealtimeTab refresh={refresh} />
         )}
         {tab === "updates" && <UpdatesTab />}
       </div>
@@ -922,6 +945,546 @@ function FilterToggle({
         <span className="filter-toggle-hint muted">{hint}</span>
       </span>
     </label>
+  );
+}
+
+// ---------- Realtime tab (PR-2a — multi-profile) ----------
+//
+// Replaces the legacy single-form view. List of saved profiles with
+// Add / Edit / Delete / Activate / Test per row. Mirrors `ProvidersTab`
+// in structure so the two settings surfaces feel the same.
+//
+// `listRealtimeProfiles()` triggers the backend's one-time migration:
+// pre-PR-2a users see their old single record appear as a profile
+// named "default" the first time this tab opens.
+//
+// The API key field is NEVER pre-filled — we never read JWTs back to
+// the renderer. A green "key saved" badge tells the user a key exists;
+// leaving the field empty during save means "leave it alone". Mirrors
+// the AddProviderForm behavior for API keys.
+
+function RealtimeTab({ refresh }: { refresh: () => Promise<void> }) {
+  const [settings, setSettings] = useState<RealtimeSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Editor state: `null` = closed. `{ id: null }` = add new.
+  // `{ id: <existing> }` = edit existing. Only one editor at a time.
+  const [editing, setEditing] = useState<{ id: string | null } | null>(null);
+
+  const loadProfiles = useCallback(async () => {
+    setError(null);
+    try {
+      setSettings(await listRealtimeProfiles());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProfiles();
+  }, [loadProfiles]);
+
+  const initialFor = (id: string | null) =>
+    id ? settings?.profiles.find((p) => p.id === id) ?? null : null;
+
+  return (
+    <section className="settings-card">
+      <div className="settings-card-title" style={{ fontSize: 16 }}>
+        Supabase Realtime profiles
+      </div>
+      <p className="muted" style={{ marginTop: 4, marginBottom: 18 }}>
+        One profile per project / service. Each profile has its own
+        URL, channel, and stored JWT. One profile is active at a time —
+        Active Scan starts streams against the active profile by
+        default, with optional per-scan overrides.
+      </p>
+
+      {error && <div className="onboarding-error">{error}</div>}
+
+      {settings && settings.profiles.length === 0 && !editing && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          No profiles yet. Click <strong>+ Add profile</strong> to
+          create one.
+        </p>
+      )}
+
+      {settings?.profiles.map((p) => (
+        <RealtimeProfileRow
+          key={p.id}
+          profile={p}
+          isActive={p.id === settings.activeProfileId}
+          onActivate={async () => {
+            try {
+              await activateRealtimeProfile(p.id);
+              await loadProfiles();
+              await refresh();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onDelete={async () => {
+            if (!confirm(`Delete profile "${p.name}"?`)) return;
+            try {
+              await deleteRealtimeProfile(p.id);
+              await loadProfiles();
+              await refresh();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onEdit={() => setEditing({ id: p.id })}
+          editing={editing?.id === p.id}
+        />
+      ))}
+
+      {!editing ? (
+        <div style={{ marginTop: 18 }}>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => setEditing({ id: null })}
+          >
+            + Add profile
+          </button>
+        </div>
+      ) : (
+        <RealtimeProfileEditor
+          initial={initialFor(editing.id)}
+          onSaved={async () => {
+            setEditing(null);
+            await loadProfiles();
+            await refresh();
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+function RealtimeProfileRow({
+  profile,
+  isActive,
+  onActivate,
+  onDelete,
+  onEdit,
+  editing,
+}: {
+  profile: RealtimeProfile;
+  isActive: boolean;
+  onActivate: () => void;
+  onDelete: () => void;
+  onEdit: () => void;
+  editing: boolean;
+}) {
+  return (
+    <div
+      className="provider-row"
+      style={editing ? { opacity: 0.6 } : undefined}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500 }}>
+          {profile.name}{" "}
+          {isActive && (
+            <span className="status-badge status-ready">Active</span>
+          )}
+        </div>
+        <div
+          className="muted"
+          style={{ fontSize: 12, wordBreak: "break-all" }}
+        >
+          {profile.url} · channel <code>{profile.channel}</code>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {!isActive && (
+          <button type="button" className="ghost-btn" onClick={onActivate}>
+            Activate
+          </button>
+        )}
+        <button type="button" className="ghost-btn" onClick={onEdit}>
+          Edit
+        </button>
+        <button type="button" className="ghost-btn" onClick={onDelete}>
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Inline editor — used for both "add new" and "edit existing".
+// Owns the Test/Stop logic locally so the page-level state stays small.
+function RealtimeProfileEditor({
+  initial,
+  onSaved,
+  onCancel,
+}: {
+  initial: RealtimeProfile | null;
+  onSaved: () => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const isNew = initial === null;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [channel, setChannel] = useState(initial?.channel ?? "");
+  const [eventName, setEventName] = useState(initial?.eventName ?? "");
+  const [frameFilter, setFrameFilter] = useState(initial?.frameFilter ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Test state — same race-protected pattern as Phase 0.5 used at the
+  // page level. Scoped to the editor so a Test for one profile can't
+  // bleed into another row.
+  const [testing, setTesting] = useState(false);
+  const [testStageLabel, setTestStageLabel] = useState<string | null>(null);
+  const [activeTestId, setActiveTestId] = useState<string | null>(null);
+  const liveTestIdRef = useRef<string | null>(null);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  // Presence-check the namespaced SecretStore slot for THIS profile
+  // (only meaningful when editing an existing one). New profiles never
+  // have a saved key.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!initial) {
+        setKeyConfigured(false);
+        return;
+      }
+      try {
+        const present = await secretStatus(realtimeApiKeyName(initial.id));
+        if (!cancelled) setKeyConfigured(present);
+      } catch {
+        // Non-fatal — badge stays grey, user can still proceed.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initial]);
+
+  async function test() {
+    const typedKey = apiKey.trim();
+    if (!url.trim() || !name.trim()) {
+      setTestResult({
+        ok: false,
+        message: "Enter a profile name and Supabase URL before testing.",
+      });
+      return;
+    }
+    if (!typedKey && !keyConfigured) {
+      setTestResult({
+        ok: false,
+        message: "Enter an API key (or save one) before testing.",
+      });
+      return;
+    }
+
+    // **Save first, then test.** The user types a key, clicks Test, and
+    // expects the key to be persisted. Before this, Test was a dry-run
+    // and the key only stuck via a separate Save click — surprising
+    // when the test passed but the next session lost the key. Now Test
+    // is "save the profile (including the key) THEN run a connect+join
+    // against the saved values". One round trip, one persisted state.
+    // If save fails, we don't test — surface the save error and bail.
+    setSaveError(null);
+    try {
+      const saved = await saveRealtimeProfile({
+        id: initial?.id ?? null,
+        name: name.trim(),
+        url: url.trim(),
+        channel: channel.trim(),
+        eventName: eventName.trim(),
+        frameFilter: frameFilter.trim(),
+        apiKey: typedKey || null,
+      });
+      // Activate the just-saved profile so the test command's vault
+      // resolves to ITS namespaced key, not whatever else happens to
+      // be active. Without this, testing a fresh profile would read
+      // the previously-active profile's JWT — silent wrong-account
+      // failure.
+      await activateRealtimeProfile(saved.id);
+      // Clear the typed-key field once it's persisted, mirroring the
+      // post-Save UX. The "✓ saved" badge confirms the slot is filled.
+      setApiKey("");
+      setKeyConfigured(true);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    liveTestIdRef.current = id;
+    setActiveTestId(id);
+    setTesting(true);
+    setTestStageLabel("Testing…");
+    setTestResult(null);
+    const unlisten = await onTestRealtimeProgress((p) => {
+      if (liveTestIdRef.current === id) setTestStageLabel(p.label);
+    });
+    try {
+      // Inputs all null — the saved profile (which we just wrote) is
+      // the authoritative source. The Rust shim resolves them from the
+      // active profile or, in the case of a fresh profile we just
+      // created, from the saved record.
+      const result = await testRealtimeConnection(id, {
+        supabaseUrl: null,
+        apiKey: null,
+        channel: null,
+      });
+      if (liveTestIdRef.current === id) setTestResult(result);
+    } catch (e) {
+      if (liveTestIdRef.current === id) {
+        setTestResult({
+          ok: false,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    } finally {
+      unlisten();
+      if (liveTestIdRef.current === id) {
+        liveTestIdRef.current = null;
+        setTestStageLabel(null);
+        setTesting(false);
+        setActiveTestId(null);
+      }
+    }
+  }
+
+  async function stopTest() {
+    if (!activeTestId) return;
+    const idToCancel = activeTestId;
+    liveTestIdRef.current = null;
+    setTestStageLabel(null);
+    setTesting(false);
+    setActiveTestId(null);
+    setTestResult({ ok: false, message: "Test cancelled." });
+    try {
+      await cancelRealtimeTest(idToCancel);
+    } catch {
+      // Best-effort; the 5 s Rust budget reaps it anyway.
+    }
+  }
+
+  async function save() {
+    setSaveError(null);
+    setSaving(true);
+    try {
+      await saveRealtimeProfile({
+        id: initial?.id ?? null,
+        name: name.trim(),
+        url: url.trim(),
+        channel: channel.trim(),
+        eventName: eventName.trim(),
+        frameFilter: frameFilter.trim(),
+        // Empty string is treated as null on the Rust side — "leave
+        // the existing key alone". A user explicitly clears a key by
+        // deleting + re-creating the profile (intentional — clearing
+        // a JWT is rare and shouldn't be accidental).
+        apiKey: apiKey.trim() || null,
+      });
+      await onSaved();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const canSave = !saving && !!name.trim() && !!url.trim();
+
+  return (
+    <div className="add-provider-form" style={{ marginTop: 18 }}>
+      <div className="settings-card-title" style={{ fontSize: 14, marginBottom: 8 }}>
+        {isNew ? "Add new profile" : `Edit profile`}
+      </div>
+
+      <label className="onboarding-label">Profile name</label>
+      <input
+        type="text"
+        className="onboarding-input"
+        value={name}
+        placeholder="e.g. checkout-service prod"
+        onChange={(e) => setName(e.target.value)}
+        spellCheck={false}
+      />
+
+      <label className="onboarding-label" style={{ marginTop: 10 }}>
+        Supabase URL
+      </label>
+      <input
+        type="text"
+        className="onboarding-input"
+        value={url}
+        placeholder="https://abc123.supabase.co"
+        onChange={(e) => setUrl(e.target.value)}
+        spellCheck={false}
+        autoComplete="off"
+      />
+
+      <label className="onboarding-label" style={{ marginTop: 10 }}>
+        API key{" "}
+        {keyConfigured && (
+          <span
+            style={{
+              marginLeft: 6,
+              fontSize: 11,
+              color: "#34d399",
+              fontWeight: 500,
+            }}
+          >
+            ✓ saved
+          </span>
+        )}
+      </label>
+      <input
+        type="password"
+        className="onboarding-input"
+        value={apiKey}
+        placeholder={
+          keyConfigured
+            ? "(saved — leave empty to keep current)"
+            : "Paste your anon or service-role JWT"
+        }
+        onChange={(e) => setApiKey(e.target.value)}
+        spellCheck={false}
+        autoComplete="off"
+      />
+
+      <label className="onboarding-label" style={{ marginTop: 10 }}>
+        Channel
+      </label>
+      <input
+        type="text"
+        className="onboarding-input"
+        value={channel}
+        placeholder="drift-profiler-events"
+        onChange={(e) => setChannel(e.target.value)}
+        spellCheck={false}
+      />
+
+      <button
+        type="button"
+        className="ghost-btn"
+        style={{ marginTop: 8, alignSelf: "flex-start", fontSize: 12 }}
+        onClick={() => setShowAdvanced((v) => !v)}
+      >
+        {showAdvanced ? "▾" : "▸"} Advanced
+      </button>
+
+      {showAdvanced && (
+        <>
+          <label className="onboarding-label" style={{ marginTop: 10 }}>
+            Inner event name filter
+          </label>
+          <input
+            type="text"
+            className="onboarding-input"
+            value={eventName}
+            placeholder="profiler-event"
+            onChange={(e) => setEventName(e.target.value)}
+            spellCheck={false}
+          />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Subscriber drops broadcasts whose <code>payload.event</code>{" "}
+            doesn't match. Empty = accept all.
+          </span>
+
+          <label className="onboarding-label" style={{ marginTop: 10 }}>
+            Default frame filter
+          </label>
+          <input
+            type="text"
+            className="onboarding-input"
+            value={frameFilter}
+            placeholder="file:/app/ name:create"
+            onChange={(e) => setFrameFilter(e.target.value)}
+            spellCheck={false}
+          />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Pre-fills the per-scan search input. DSL:{" "}
+            <code>name:foo</code>, <code>file:/app/</code>, free-text
+            matches both, leading <code>!</code> negates.
+          </span>
+        </>
+      )}
+
+      {saveError && (
+        <div className="onboarding-error" style={{ marginTop: 10 }}>
+          {saveError}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={save}
+          disabled={!canSave}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+        {testing ? (
+          <button type="button" className="ghost-btn" onClick={stopTest}>
+            ⏹ Stop ({testStageLabel ?? "Testing…"})
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={test}
+            disabled={!url.trim() || (!apiKey.trim() && !keyConfigured)}
+            title={
+              !url.trim()
+                ? "Enter the Supabase URL first"
+                : !apiKey.trim() && !keyConfigured
+                  ? "Paste or save an API key first"
+                  : "Connect + join + close (one-shot, ~5s)"
+            }
+          >
+            Test Connection
+          </button>
+        )}
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={onCancel}
+          disabled={saving}
+        >
+          Cancel
+        </button>
+      </div>
+
+      {testResult && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "8px 12px",
+            borderRadius: 6,
+            fontSize: 13,
+            background: testResult.ok
+              ? "rgba(52, 211, 153, 0.08)"
+              : "rgba(248, 113, 113, 0.08)",
+            color: testResult.ok ? "#34d399" : "#f87171",
+            border: `1px solid ${
+              testResult.ok
+                ? "rgba(52, 211, 153, 0.3)"
+                : "rgba(248, 113, 113, 0.3)"
+            }`,
+          }}
+        >
+          {testResult.ok ? "✓ " : "✗ "}
+          {testResult.message}
+        </div>
+      )}
+    </div>
   );
 }
 

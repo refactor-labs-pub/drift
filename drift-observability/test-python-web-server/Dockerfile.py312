@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1.7
+#
+# Python 3.12 build of the test web server — exercises the cp312
+# `drift-docker-profiler` manylinux wheel end-to-end.
+#
+# Difference from the cp37 Dockerfile next to this one:
+#   * `python:3.12-slim` base (vs. `python:3.7-slim`)
+#   * Modern fastapi / uvicorn / pydantic v2 (the 3.7 image had to pin
+#     to fastapi <0.104 + pydantic v1 because the 0.104+ line dropped
+#     3.7 support)
+#   * Reads the wheel from `drift-profiler-python/wheelhouse-cp312/`
+#     instead of `drift-profiler-python/dist/`, so this build doesn't
+#     have to share an artifact path with the cp37 image. CI uploads to
+#     `wheelhouse-cp312/`; a local `make wheel-driftdockerprofiler-cp312`
+#     should land it in the same place.
+#
+# Build context MUST be the `drift-observability/` directory so both
+# this folder AND `drift-profiler-python/wheelhouse-cp312/` are visible:
+#
+#   docker build \
+#     -f test-python-web-server/Dockerfile.py312 \
+#     -t drift-test-web-py312 \
+#     drift-observability/
+#
+# Run with a shared trace volume so events land outside the container:
+#
+#   docker run --rm -p 8000:8000 \
+#     -v "$PWD/trace:/trace" \
+#     drift-test-web-py312
+#
+# Then `curl localhost:8000/orders ...` and watch `trace/events.log`.
+
+FROM python:3.12-slim
+WORKDIR /app
+
+# fastapi + uvicorn + pydantic v2. No version pins beyond a floor —
+# the cp37 image pins because 3.7 forces old library lines; on 3.12 we
+# take whatever current PyPI ships and let `pip` resolve a coherent set.
+RUN pip install --no-cache-dir \
+    'fastapi>=0.115' \
+    'uvicorn[standard]>=0.32' \
+    'pydantic>=2.9'
+
+# Prebuilt drift-docker-profiler wheel — must match the runtime Python
+# ABI tag (cp312). The CI job `build-wheels-modern` produces this; for
+# local Docker builds, the developer runs the manylinux2014 build out
+# of band (see CONTRIBUTING.md) and the wheel lands in wheelhouse-cp312/.
+# Newer setuptools normalizes the dist name to `drift_docker_profiler`
+# (underscores per PEP 503), so the glob accepts both spellings.
+COPY drift-profiler-python/wheelhouse-cp312/drift*docker*profiler-*cp312*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/drift*docker*profiler-*cp312*.whl && \
+    rm /tmp/drift*docker*profiler-*cp312*.whl && \
+    python -c "import driftdockerprofiler; \
+assert driftdockerprofiler.cpu_profiling_available(), \
+    'native C++ extension did not load — wheel is broken'; \
+print('cp312 wheel install OK — cpu_profiling_available()=True')"
+
+COPY test-python-web-server/app.py test-python-web-server/orders.py /app/
+
+# JSONL events go here. The observability-server's tailer reads the
+# same path (TRACE_PATH defaults to /trace/events.log). Mount a shared
+# volume at /trace to wire them together.
+ENV DRIFT_EVENTS_PATH=/trace/events.log
+
+EXPOSE 8000
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

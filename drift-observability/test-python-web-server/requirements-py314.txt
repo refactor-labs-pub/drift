@@ -1,0 +1,16 @@
+# Pinned for python:3.14. Newer than `requirements.txt` because that
+# one is held back to the last fastapi/uvicorn/pydantic versions still
+# on PyPI for python:3.7.
+#
+# fastapi 0.115+ runs on 3.14 and bundles starlette compatible with the
+# new asyncio behaviour; pydantic v2 is required (v1 has no 3.14 wheels
+# and the str-annotation eval path bit-rots on the new typing module).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
+# Supabase WSS sink — websocket-client drives the Phoenix Channels
+# socket, certifi supplies the CA bundle so the TLS handshake works on
+# a slim image (no system trust store).
+websocket-client>=1.6,<2
+certifi

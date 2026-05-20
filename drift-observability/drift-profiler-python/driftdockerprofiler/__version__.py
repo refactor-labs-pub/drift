@@ -3,5 +3,6 @@
 """Version of driftdockerprofiler."""
 
 # setup.py reads the version information from here to set package version.
-# Bumped past 4.1.x to disambiguate from upstream google-cloud-profiler.
-__version__ = '4.2.0'
+# 0.0.1 — first release of the Refactor Labs fork. Bumped per semver
+# from this baseline as features land.
+__version__ = '0.0.1'

@@ -1,9 +1,18 @@
 include MANIFEST.in
 include LICENSE
+include README.md
+include CHANGELOG.md
+include EVENT_FILE_FORMAT.md
 
 # Header files are not by default included in the source distribution created
 # by sdist.
 recursive-include driftdockerprofiler *.h
+
+# C++ source for the SIGPROF CPU sampler. Without this the sdist
+# installs but produces an import-time error when `_profiler.so` is
+# imported on Linux — the extension wouldn't have been built because
+# its sources aren't there.
+recursive-include driftdockerprofiler/src *.cc *.h
 
 # JSON Schemas (Draft 2026-05) shipped alongside the Python modules so
 # runtime callers of driftdockerprofiler.event_schema() find them in

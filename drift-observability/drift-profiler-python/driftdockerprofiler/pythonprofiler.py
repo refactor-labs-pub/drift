@@ -156,14 +156,33 @@ class WallProfiler:
       frame: A Frame object representing the leaf frame of the stack.
 
     Returns:
-      A tuple of frames. The leaf frame is at position 0. A frame is a
-      (function name, filename, line number) tuple.
+      A tuple of frames, leaf-first. Each frame is a 5-tuple
+      ``(name, file, line, qualified_name, module)``. Phase F1b
+      widened the legacy 3-tuple shape; downstream consumers
+      (`_filter_traces`, `frames_to_dicts`, `Builder.populate_profile`)
+      are length-aware and tolerate both the 3- and 5-tuple shapes,
+      so the C++ CPU sampler — which still emits 3-tuples — flows
+      through unchanged.
+
+      The two new fields enable joining a sampled profile to a
+      static profile on `(file, qualified_name)`. ``qualified_name``
+      is ``''`` on Python < 3.11 (``co_qualname`` is 3.11+); ``module``
+      is the frame's globals' ``__name__`` or ``''`` if unavailable.
+      Empty values are dropped by the writer so the JSONL stays clean.
     """
     depth = 0
     trace = []
     while frame is not None and depth < _MAX_STACK_DEPTH:
-      frame_tuple = (frame.f_code.co_name, frame.f_code.co_filename,
-                     frame.f_lineno)
+      co = frame.f_code
+      # `co_qualname` is Python 3.11+. getattr with `''` keeps 3.7-3.10
+      # working — those frames just don't get the field on the wire.
+      qualname = getattr(co, 'co_qualname', '') or ''
+      globals_ = frame.f_globals
+      # f_globals is documented to always be a dict, but defensive
+      # access is cheap and survives interpreter-teardown edge cases.
+      module = globals_.get('__name__', '') if globals_ else ''
+      frame_tuple = (co.co_name, co.co_filename, frame.f_lineno,
+                     qualname, module)
       trace.append(frame_tuple)
       frame = frame.f_back
       depth += 1

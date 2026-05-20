@@ -1,3 +1,52 @@
+## 0.0.1
+
+First release under the **Refactor Labs** fork of the Google Cloud
+Profiler Python agent. Distributed on PyPI as `drift-docker-profiler`
+(import name `driftdockerprofiler`).
+
+### ⚠ BREAKING CHANGES
+
+*   GCP transport layer removed entirely. The agent no longer talks
+    to the Stackdriver Profiler v2 service; it writes JSONL events to
+    a local file (default `/tmp/drift/events.jsonl`) or streams them
+    over Supabase Realtime. Runtime dependencies on
+    `google-api-python-client`, `google-auth`, `google-auth-httplib2`,
+    `protobuf`, and `requests` are all gone — base install pulls zero
+    third-party packages on Python 3.8+ (only `typing_extensions` on
+    3.7).
+*   `project_id` kwarg is no longer accepted by `start()` — there is
+    no project to upload to. Callers that pass it will get a
+    `TypeError`.
+
+### Features
+
+*   Pluggable sink architecture (`Sink` protocol, `JsonlFileSink`,
+    `SupabaseRealtimeSink`, `TeeSink`). Auto-wires the Supabase sink
+    when `SUPABASE_URL` + `SUPABASE_REALTIME_API_KEY` are set.
+*   New all-threads wall sampler (`wall_strategy='all_threads'`,
+    default) — covers code running on threadpool workers (uvicorn,
+    gunicorn, Django WSGI, `loop.run_in_executor`). Legacy SIGALRM
+    sampler still available via `wall_strategy='signal'`.
+*   `emit_mode='per_trace'` (default) vs `'bundle'` — choose between
+    one JSONL line per unique stack per window, or one line per
+    window containing the whole pprof-shaped `Profile`.
+*   Per-event `cpu` (loadavg) + `memory_bytes` (RSS) labels.
+*   Deterministic `@trace` decorator that lands in the same JSONL
+    stream as sampler events.
+*   Concurrent per-type polling — WALL and CPU sample simultaneously
+    instead of round-robin, closing the "request fell into a CPU
+    window" wall coverage gap.
+*   Explicit `stop()` + `atexit` shutdown that flushes the writer
+    cleanly on exit.
+*   JSON Schema (Draft 2020-12) + OpenAPI 3.1 definitions shipped
+    inside the wheel as `package_data` for runtime validation.
+
+### Compatibility
+
+*   Python 3.7 → 3.13 (verified in CI).
+*   Linux x86_64 (CPU + wall samplers) and macOS (wall sampler only —
+    SIGPROF semantics on Darwin are too limited for the C++ ext).
+
 ## 4.1.0
 
 ### Features

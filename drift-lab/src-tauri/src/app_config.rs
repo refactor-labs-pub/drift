@@ -13,6 +13,10 @@ use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
 use crate::model_config::ModelBackend;
+// Canonical definition lives in the realtime domain; we re-export it from
+// this module so existing call sites (`commands.rs`, etc.) keep their
+// `app_config::RealtimeConfig` import path unchanged through PR-1.
+pub use crate::realtime::domain::RealtimeConfig;
 
 pub const STORE_FILE: &str = "app-config.json";
 const CONFIG_KEY: &str = "config";
@@ -50,6 +54,21 @@ pub struct AppConfig {
     /// users who never visit Settings after upgrade.
     #[serde(default)]
     pub scan_filters: ScanFilters,
+    /// **Legacy** single-record realtime config (Phase B). Retained as the
+    /// migration source: on first load after upgrading to PR-2a we copy
+    /// non-empty values from here into `realtime_settings` as a single
+    /// auto-named profile. New code reads/writes [`realtime_settings`]
+    /// instead. Stays until a follow-up release confirms every user has
+    /// migrated.
+    #[serde(default)]
+    pub realtime: RealtimeConfig,
+    /// Multi-profile realtime settings (PR-2a+). One profile per
+    /// project/service; one is "active" at a time. Empty by default;
+    /// `AppConfigProfileRepository::load` performs a one-time migration
+    /// from [`realtime`] when this field is empty and the legacy one
+    /// has data.
+    #[serde(default)]
+    pub realtime_settings: crate::realtime::domain::RealtimeSettings,
 }
 
 /// User-toggleable scan-walker filters. Mirrors the relevant subset of
@@ -97,6 +116,11 @@ impl Default for ScanFilters {
 fn default_true() -> bool {
     true
 }
+
+// `RealtimeConfig` lives in `crate::realtime::domain` and is re-exported
+// at the top of this module so persisting it stays a one-liner. Its
+// `#[serde(default)]` + `Default` impl over there is what makes
+// pre-realtime-era app-config blobs deserialize cleanly.
 
 pub fn load<R: Runtime>(app: &AppHandle<R>) -> Result<AppConfig> {
     let store = app.store(STORE_FILE).context("opening app-config store")?;

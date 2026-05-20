@@ -45,16 +45,22 @@ def test_profile_returns_dict_of_traces():
     # ~40 samples at 5 ms; aggregated into far fewer unique stacks.
     assert sum(traces.values()) >= 5, traces
 
-    # Every key is a tuple of (name, file, line) frame tuples.
+    # Every key is a tuple of frame 5-tuples post-F1b
+    # `(name, file, line, qualified_name, module)`. Positions 0-2 are
+    # unchanged from the legacy 3-tuple shape, so any consumer that
+    # only needed `(name, file, line)` keeps working via positional
+    # access without code changes.
     for trace, count in traces.items():
         assert isinstance(trace, tuple) and trace
         assert isinstance(count, int) and count >= 1
         for frame in trace:
-            assert isinstance(frame, tuple) and len(frame) == 3
-            name, fname, lineno = frame
+            assert isinstance(frame, tuple) and len(frame) == 5
+            name, fname, lineno, qualname, module = frame
             assert isinstance(name, str)
             assert isinstance(fname, str)
             assert isinstance(lineno, int)
+            assert isinstance(qualname, str)
+            assert isinstance(module, str)
 
 
 def test_profile_clears_state_between_runs():

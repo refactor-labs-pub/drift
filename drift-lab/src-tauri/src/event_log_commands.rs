@@ -82,6 +82,25 @@ pub async fn aggregate_event_log(path: String) -> Result<AggregateReport, String
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Phase F4. Read the JSONL file at `path` and convert it into a
+/// `profile.schema.json`-shaped document with `mode: "sampled"`.
+/// Returns the JSON as a string (the caller saves to disk or pipes
+/// into the static-profile viewer). Errors surface as
+/// `Result<_, String>` per project convention.
+///
+/// Output is loadable by the same viewer that renders static profiles:
+/// every field name matches `drift-static-profiler/schema/profile.schema.json`.
+/// A consumer that has BOTH a static profile and a converted sampled
+/// profile for the same codebase can join on `CallTreeNode.id`.
+#[tauri::command]
+pub async fn export_static_profile_json(path: String) -> Result<String, String> {
+    let pb = PathBuf::from(path);
+    tokio::task::spawn_blocking(move || crate::event_log_to_profile::convert(&pb))
+        .await
+        .map_err(|e| format!("join error: {e}"))?
+        .map_err(|e| format!("{e:#}"))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadedEventLog {
@@ -159,21 +178,37 @@ pub async fn start_live_event_scan<R: Runtime>(
     state: State<'_, AppState>,
     app: AppHandle<R>,
 ) -> Result<String, String> {
-    let pb = PathBuf::from(&path);
+    start_live_event_scan_inner(
+        PathBuf::from(&path),
+        Arc::clone(&state.live_event_scans),
+        app,
+    )
+    .await
+}
+
+/// Start a live-tail aggregator without going through the `State` injection
+/// layer. Lets other backend modules (the Supabase Realtime subscriber in
+/// `event_source_commands.rs`) reuse the file-tail logic without
+/// duplicating the polling loop. Same semantics as the Tauri command above.
+pub async fn start_live_event_scan_inner<R: Runtime>(
+    pb: PathBuf,
+    live_event_scans: LiveScans,
+    app: AppHandle<R>,
+) -> Result<String, String> {
     if !pb.is_file() {
-        return Err(format!("not a file: {path}"));
+        return Err(format!("not a file: {}", pb.display()));
     }
     let live_scan_id = Uuid::new_v4().to_string();
     let token = CancellationToken::new();
     {
-        let mut guard = state.live_event_scans.lock().await;
+        let mut guard = live_event_scans.lock().await;
         guard.insert(live_scan_id.clone(), token.clone());
     }
 
     let id_for_task = live_scan_id.clone();
     let app_for_task = app.clone();
     let path_for_task = pb.clone();
-    let live_scans = Arc::clone(&state.live_event_scans);
+    let live_scans = Arc::clone(&live_event_scans);
 
     tauri::async_runtime::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_millis(LIVE_POLL_MS));
@@ -234,7 +269,16 @@ pub async fn stop_live_event_scan(
     live_scan_id: String,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let mut guard = state.live_event_scans.lock().await;
+    stop_live_event_scan_inner(live_scan_id, Arc::clone(&state.live_event_scans)).await
+}
+
+/// Stop a live-tail aggregator without going through `State` injection. See
+/// `start_live_event_scan_inner` for the rationale.
+pub async fn stop_live_event_scan_inner(
+    live_scan_id: String,
+    live_event_scans: LiveScans,
+) -> Result<bool, String> {
+    let mut guard = live_event_scans.lock().await;
     let Some(token) = guard.remove(&live_scan_id) else {
         return Ok(false);
     };

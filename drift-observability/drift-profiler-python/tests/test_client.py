@@ -168,7 +168,14 @@ def test_client_emits_wall_trace_events(tmp_path):
     assert isinstance(ev['count'], int) and ev['count'] >= 1
     assert isinstance(ev['frames'], list) and ev['frames']
     f0 = ev['frames'][0]
-    assert set(f0.keys()) == {'name', 'file', 'line'}
+    # Phase F1a: every Frame carries the original required triple
+    # PLUS optional join-key fields that mirror the static profiler's
+    # `Frame` schema (language/is_native/is_system). Old required
+    # keys must still be present; new ones are checked below.
+    assert {'name', 'file', 'line'}.issubset(f0.keys())
+    assert f0['language'] == 'python'
+    assert f0['is_native'] is False
+    assert isinstance(f0['is_system'], bool)
     assert ev['time'].endswith('Z')
 
     # cpu (1-min load) and memory_bytes (process RSS) are stamped on
@@ -388,3 +395,91 @@ def test_client_emits_cpu_trace_events(tmp_path):
     events = _read_events(out)
     cpu_events = [e for e in events if e.get('type') == 'cpu_trace']
     assert cpu_events
+
+
+# ----------------------------------------------------------------- F2: profile_metadata
+
+def test_profile_metadata_emitted_as_first_line(tmp_path):
+    """Phase F2 contract: the very first JSONL line a session writes
+    is a `profile_metadata` event. A converter reading the stream
+    linearly gets `mode`/`generator`/`source_root` before any sample
+    arrives, so it can build a `profile.schema.json` document
+    without a second pass."""
+    out = str(tmp_path / 'events.jsonl')
+    c = _mk_client(
+        service='svc-meta',
+        output_path=out,
+        period_ms=5,
+        duration_ms=100,
+        disable_cpu_profiling=True,
+    )
+    c.start()
+    try:
+        # Even an immediate stop must produce the header — it lands
+        # before the polling threads run.
+        pass
+    finally:
+        c.stop()
+
+    events = _read_events(out)
+    assert events, 'no events emitted at all'
+    first = events[0]
+    assert first['type'] == 'profile_metadata', (
+        'first JSONL line must be profile_metadata, got %r' % first['type'])
+
+
+def test_profile_metadata_carries_generator_block(tmp_path):
+    """The Generator block mirrors `profile.schema.json::Generator`
+    field-for-field. F4's Rust converter copies these straight into
+    the static-shaped `Report.generator`."""
+    import sys as _sys
+    out = str(tmp_path / 'events.jsonl')
+    c = _mk_client(
+        service='svc-gen',
+        output_path=out,
+        period_ms=5,
+        duration_ms=100,
+        disable_cpu_profiling=True,
+    )
+    c.start()
+    c.stop()
+    events = _read_events(out)
+    meta = events[0]
+    # Required top-level fields.
+    assert meta['mode'] == 'sampled'
+    assert meta['schema_version'] == '1.0'
+    assert meta['service'] == 'svc-gen'
+    assert meta['service_id']                       # uuid hex, non-empty
+    assert len(meta['service_id']) == 32            # uuid4().hex length
+    # Generator block.
+    gen = meta['generator']
+    assert gen['tool'] == 'driftdockerprofiler'
+    assert gen['version']                            # non-empty
+    assert gen['host']
+    assert gen['captured_at'].endswith('Z')
+    assert gen['source_root']                        # cwd present
+    assert gen['language_versions']['python'].startswith(
+        '%d.%d.' % _sys.version_info[:2])
+
+
+def test_profile_metadata_emitted_exactly_once_per_start(tmp_path):
+    """The header is a session marker — only one per Client.start().
+    Even if the agent runs many polling windows, the count stays 1."""
+    out = str(tmp_path / 'events.jsonl')
+    c = _mk_client(
+        service='svc-once',
+        output_path=out,
+        period_ms=5,
+        duration_ms=50,
+        disable_cpu_profiling=True,
+    )
+    c.start()
+    try:
+        _busy_burn(0.2)   # plenty of time for many polling cycles
+    finally:
+        c.stop()
+    events = _read_events(out)
+    headers = [e for e in events if e.get('type') == 'profile_metadata']
+    assert len(headers) == 1, (
+        'expected exactly one profile_metadata header per session, '
+        'found %d' % len(headers))

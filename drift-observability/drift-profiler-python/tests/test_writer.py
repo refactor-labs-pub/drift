@@ -144,3 +144,58 @@ def test_frames_to_dicts():
         {'name': 'leaf', 'file': '/a/x.py', 'line': 12},
         {'name': 'caller', 'file': '/a/y.py', 'line': 99},
     ]
+
+
+# ----------------------------------------------------------------- F1a
+
+def test_frames_to_dicts_back_compat_when_predicate_omitted():
+    """The default (no predicate) path must produce byte-for-byte
+    identical output to pre-F1a — that's what guarantees old
+    consumers don't see schema drift if they upgrade the wheel
+    without opting in."""
+    trace = (('leaf', '/a/x.py', 12),)
+    out = frames_to_dicts(trace)
+    assert out == [{'name': 'leaf', 'file': '/a/x.py', 'line': 12}]
+    assert set(out[0].keys()) == {'name', 'file', 'line'}
+
+
+def test_frames_to_dicts_enriches_when_predicate_supplied():
+    """With a predicate, every emitted dict carries the F1a fields —
+    `language='python'`, `is_native=False`, and `is_system` derived
+    from the predicate. Lets a viewer join dynamic frames against
+    the static profiler's Frame schema on `(file, name)`."""
+    trace = (
+        ('leaf', '/usr/lib/python3.11/asyncio/runners.py', 43),
+        ('caller', '/app/orders.py', 23),
+    )
+    is_system = lambda f: '/lib/python3.' in f or '/site-packages/' in f
+    out = frames_to_dicts(trace, is_system_predicate=is_system)
+    assert out == [
+        {
+            'name': 'leaf',
+            'file': '/usr/lib/python3.11/asyncio/runners.py',
+            'line': 43,
+            'language': 'python',
+            'is_native': False,
+            'is_system': True,
+        },
+        {
+            'name': 'caller',
+            'file': '/app/orders.py',
+            'line': 23,
+            'language': 'python',
+            'is_native': False,
+            'is_system': False,
+        },
+    ]
+
+
+def test_frames_to_dicts_predicate_returns_bool_coercion():
+    """A predicate returning truthy non-bool values still emits a
+    real bool — `is_system` is typed `boolean` in the schema and
+    JSON consumers will reject `1` / `"yes"` for that field."""
+    trace = (('x', '/something.py', 1),)
+    truthy_int = lambda _: 1   # non-bool truthy
+    out = frames_to_dicts(trace, is_system_predicate=truthy_int)
+    assert out[0]['is_system'] is True
+    assert isinstance(out[0]['is_system'], bool)

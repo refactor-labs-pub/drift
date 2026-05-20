@@ -27,6 +27,7 @@ up:
 	@minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running || minikube start --memory=8192 --cpus=10 --kubernetes-version=v1.35.1
 	@kubectl config use-context minikube
 	@pkill -f "tilt up" 2>/dev/null || true
+	@$(MAKE) -f $(INFRA_DIR)Makefile wipe-trace
 	@if [ -n "$(ENV_FILE)" ]; then \
 	  echo "Using env file: $(ENV_FILE)$(if $(env), (override via env=),$(if $(wildcard $(ROOT_ENV)), (root default), (infrastructure default)))"; \
 	else \
@@ -36,30 +37,51 @@ up:
 	cd $(INFRA_DIR) && tilt up --debug -- $(ARGS)
 
 down:
-	@kubectl config use-context minikube
-	cd $(INFRA_DIR) && tilt down --debug
+	@pkill -f "tilt up" 2>/dev/null || true
+	@if minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running; then \
+	  if kubectl config get-contexts -o name 2>/dev/null | grep -qx minikube; then \
+	    kubectl config use-context minikube >/dev/null; \
+	  fi; \
+	  (cd $(INFRA_DIR) && tilt down --debug) || echo "warning: tilt down exited non-zero, continuing"; \
+	else \
+	  echo "minikube not running — skipping tilt down (no resources to tear down)"; \
+	fi
 	@$(MAKE) -f $(INFRA_DIR)Makefile wipe-trace
 
 # Removes accumulated trace events on the minikube node so the next
 # `make up` starts with an empty /trace/events.log.
 wipe-trace:
-	@minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running || { echo "minikube not running, skipping wipe"; exit 0; }
-	@echo "Wiping shared trace volume on minikube node: $(SHARED_VOLUME_PATH)"
-	@minikube ssh -- "sudo rm -rf $(SHARED_VOLUME_PATH)/* 2>/dev/null || true"
+	@if minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running; then \
+	  echo "Wiping shared trace volume on minikube node: $(SHARED_VOLUME_PATH)"; \
+	  minikube ssh -- "sudo rm -rf $(SHARED_VOLUME_PATH)/* 2>/dev/null || true"; \
+	else \
+	  echo "minikube not running, skipping wipe"; \
+	fi
 
 stop:
 	@minikube stop
 
 reset-data:
-	@kubectl config use-context minikube
+	@if ! minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running; then \
+	  echo "minikube not running — start it first with 'make up' (cannot delete PVCs against an offline cluster)"; \
+	  exit 1; \
+	fi
+	@kubectl config use-context minikube >/dev/null
 	@echo "Deleting all PersistentVolumeClaims in 'local' namespace..."
 	@kubectl delete pvc --all -n local --ignore-not-found
 	@echo "Done. Run 'make up' to start fresh with empty databases."
 
 nuke:
-	@kubectl config use-context minikube
-	cd $(INFRA_DIR) && tilt down --debug
-	@minikube delete
+	@pkill -f "tilt up" 2>/dev/null || true
+	@if minikube status --format="{{.Host}}" 2>/dev/null | grep -q Running; then \
+	  if kubectl config get-contexts -o name 2>/dev/null | grep -qx minikube; then \
+	    kubectl config use-context minikube >/dev/null; \
+	  fi; \
+	  (cd $(INFRA_DIR) && tilt down --debug) || echo "warning: tilt down exited non-zero, continuing to minikube delete"; \
+	else \
+	  echo "minikube not running — skipping tilt down, going straight to minikube delete"; \
+	fi
+	@minikube delete || echo "warning: minikube delete exited non-zero (cluster may already be gone)"
 
 install-minikube:
 	@brew install minikube kubectl

@@ -162,6 +162,53 @@ def test_builder_time_ns_defaults_to_now():
     assert b.to_profile().time_ns > 0
 
 
+# ----------------------------------------------------------------- F1a
+
+def test_builder_back_compat_when_predicate_omitted():
+    """Without ``is_system_predicate``, bundle frames serialize as
+    pure {name, file, line} — pre-F1a wire shape, byte-for-byte."""
+    traces = {(('f', '/x.py', 1),): 1}
+    b = Builder()
+    b.populate_profile(traces, 'wall', 'nanoseconds', 10_000_000, 100_000_000)
+    sample = json.loads(json.dumps(b.to_dict()))['samples'][0]
+    frame = sample['frames'][0]
+    # New keys ABSENT (not just null) on the back-compat path. Critical
+    # for the "additive only" contract: old consumers see no diff.
+    assert set(frame.keys()) == {'name', 'file', 'line'}
+
+
+def test_builder_enriches_when_predicate_supplied():
+    """With ``is_system_predicate``, every bundle frame gains
+    language/is_native/is_system — same shape per-trace mode emits."""
+    traces = {(
+        ('leaf', '/usr/lib/python3.11/runners.py', 43),
+        ('caller', '/app/orders.py', 23),
+    ): 7}
+    b = Builder()
+    b.populate_profile(
+        traces, 'wall', 'nanoseconds', 10_000_000, 100_000_000,
+        is_system_predicate=lambda f: '/lib/python3.' in f,
+    )
+    sample = json.loads(json.dumps(b.to_dict()))['samples'][0]
+    f_leaf, f_caller = sample['frames']
+    assert f_leaf == {
+        'name': 'leaf',
+        'file': '/usr/lib/python3.11/runners.py',
+        'line': 43,
+        'language': 'python',
+        'is_native': False,
+        'is_system': True,
+    }
+    assert f_caller == {
+        'name': 'caller',
+        'file': '/app/orders.py',
+        'line': 23,
+        'language': 'python',
+        'is_native': False,
+        'is_system': False,
+    }
+
+
 def test_builder_handles_empty_traces():
     b = Builder()
     b.populate_profile({}, 'wall', 'nanoseconds', 10_000_000, 100_000_000,

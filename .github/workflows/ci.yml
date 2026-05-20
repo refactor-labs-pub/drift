@@ -25,20 +25,29 @@ jobs:
         working-directory: action
         run: npm run typecheck
 
-      - name: Test
-        working-directory: action
-        run: npm test
-
+      # Build before test: the e2e tests spawn `node dist/index.js`, so the
+      # bundle has to exist on disk first. `dist/` is gitignored so each CI
+      # run produces a fresh bundle from src/ — the sync-check below catches
+      # drift only when dist/ is tracked (i.e. on release branches that
+      # commit the bundle for marketplace consumers).
       - name: Build
         working-directory: action
         run: npm run build
 
-      - name: Verify dist/index.js is in sync
+      - name: Test
+        working-directory: action
+        run: npm test
+
+      - name: Verify dist/index.js is in sync (only when tracked)
         run: |
-          if ! git diff --quiet -- dist/index.js; then
-            echo "::error::dist/index.js is out of sync with action/src — run 'cd action && npm run build' and commit the result"
-            git --no-pager diff --stat -- dist/index.js
-            exit 1
+          if git ls-files --error-unmatch dist/index.js >/dev/null 2>&1; then
+            if ! git diff --quiet -- dist/index.js; then
+              echo "::error::dist/index.js is out of sync with action/src — run 'cd action && npm run build' and commit the result"
+              git --no-pager diff --stat -- dist/index.js
+              exit 1
+            fi
+          else
+            echo "dist/index.js is not tracked (gitignored) — skipping sync check"
           fi
 
   web-app:

@@ -18,6 +18,7 @@ from driftdockerprofiler.client import (
     BUILTIN_EXCLUDE_PATHS,
     STRICT_USER_CODE_EXCLUDE_PATHS,
     Client,
+    _is_system_frame,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -232,3 +233,45 @@ def test_user_can_override_builtins_to_keep_stdlib():
     filtered = c._filter_traces(traces)
     assert asyncio_leaf in filtered          # builtins disabled, asyncio survives
     assert profiler_self not in filtered     # user-extra still hides profiler self
+
+
+# ----------------------------------------------------------------- F1a: is_system label
+
+def test_is_system_frame_matches_profiler_self():
+    """The Google-practice rule for `Frame.is_system` is the union of
+    BUILTIN_EXCLUDE_PATHS + STRICT_USER_CODE_EXCLUDE_PATHS. Profiler
+    internals (`/driftdockerprofiler/`, the compiled `.so`, frozen
+    importlib) all classify as system."""
+    assert _is_system_frame(
+        "/usr/local/lib/python3.11/site-packages/driftdockerprofiler/cpu_profiler.py")
+    assert _is_system_frame("/opt/driftdockerprofiler/_profiler.cpython-311.so")
+    assert _is_system_frame("<frozen importlib._bootstrap>")
+
+
+def test_is_system_frame_matches_stdlib_and_site_packages():
+    """STRICT_USER_CODE preset (stdlib + site-packages) also flags
+    `is_system=True`. This is what makes the label useful: the viewer
+    can dim every stdlib/3p frame regardless of where in the stack it
+    sits, without re-running the filter."""
+    assert _is_system_frame("/usr/lib/python3.11/asyncio/runners.py")
+    assert _is_system_frame(
+        "/usr/local/lib/python3.7/site-packages/uvicorn/server.py")
+    assert _is_system_frame(
+        "/venv/lib/python3.11/site-packages/fastapi/routing.py")
+
+
+def test_is_system_frame_returns_false_for_user_code():
+    """`/app/` and similar app-root paths must be `is_system=False`
+    — that's exactly the half of the binary tree the viewer wants
+    to highlight."""
+    assert not _is_system_frame("/app/orders.py")
+    assert not _is_system_frame("/app/app.py")
+    assert not _is_system_frame("/srv/myproject/handlers.py")
+
+
+def test_is_system_frame_handles_edge_cases():
+    """Empty / missing file paths shouldn't crash. Falsy file → False
+    (defensive default; a missing file path can't be classified, so
+    we'd rather under-label than crash)."""
+    assert not _is_system_frame("")
+    assert not _is_system_frame(None)  # tracer paths sometimes lack file

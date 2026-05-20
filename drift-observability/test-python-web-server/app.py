@@ -40,7 +40,10 @@ driftdockerprofiler.start(
     period_ms=int(os.environ.get("DRIFT_PERIOD_MS", "10")),
     duration_ms=int(os.environ.get("DRIFT_DURATION_MS", "10000")),
     emit_mode=os.environ.get("DRIFT_EMIT_MODE", "per_trace"),
-    exclude_paths=("/driftdockerprofiler/", "/_profiler.cpython"),
+    # exclude_paths is NOT passed — the profiler-internal frames
+    # (`/driftdockerprofiler/`, `/_profiler.cpython`, `<frozen ...>`)
+    # are already in `BUILTIN_EXCLUDE_PATHS`. Pass project-specific
+    # patterns here only.
 )
 
 from fastapi import FastAPI, HTTPException  # noqa: E402 — after profiler.start()
@@ -108,3 +111,24 @@ async def charge_order(order_id: str, body: ChargeBody) -> dict:
 @app.post("/orders/{order_id}/ship")
 def ship_order(order_id: str) -> dict:
     return service.ship(order_id=order_id)
+
+
+# DEBUG: Phase-3 sampler verification. Returns whatever
+# `sys._current_frames()` sees right now — the same thing the
+# WallAllThreadsSampler walks every tick. Use during a parallel
+# `POST /orders` to see whether the worker thread is visible.
+@app.get("/debug/threads")
+def debug_threads() -> dict:
+    import sys, threading
+    snapshot = []
+    for tid, frame in sys._current_frames().items():
+        thread = next((t for t in threading.enumerate()
+                       if t.ident == tid), None)
+        name = thread.name if thread else "<unknown>"
+        leaf = {
+            "name": frame.f_code.co_name,
+            "file": frame.f_code.co_filename,
+            "line": frame.f_lineno,
+        }
+        snapshot.append({"tid": tid, "thread_name": name, "leaf": leaf})
+    return {"threads": snapshot}

@@ -8,18 +8,39 @@
     { "$ref": "#/$defs/CPUTraceEvent" },
     { "$ref": "#/$defs/WallProfileEvent" },
     { "$ref": "#/$defs/CPUProfileEvent" },
-    { "$ref": "#/$defs/FunctionCallEvent" }
+    { "$ref": "#/$defs/FunctionCallEvent" },
+    { "$ref": "#/$defs/ProfileMetadataEvent" }
   ],
   "$defs": {
     "Frame": {
       "type": "object",
-      "description": "One stack frame, leaf-first. Mirrors pprof's Location+Line+Function triple, flattened for JSON.",
+      "description": "One stack frame, leaf-first. Mirrors pprof's Location+Line+Function triple, flattened for JSON. Phase F1a: the optional `language`, `is_native`, and `is_system` fields mirror `drift-static-profiler/schema/profile.schema.json#/$defs/Frame` so dynamic and static profiles can be joined on `(file, name)` and rendered through one viewer.",
       "required": ["name", "file", "line"],
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "description": "Function name (CPython co_name)." },
         "file": { "type": "string", "description": "Source file (CPython co_filename)." },
-        "line": { "type": "integer", "minimum": 0, "description": "Line currently executing (CPython f_lineno)." }
+        "line": { "type": "integer", "minimum": 0, "description": "Line currently executing (CPython f_lineno)." },
+        "qualified_name": {
+          "type": "string",
+          "description": "Phase F1b. Fully-qualified function name, e.g. `OrderService.create`. Sourced from CPython's `co_qualname` (Python 3.11+); absent on 3.7-3.10. Lets a viewer join this Frame to the static profiler's Frame on `(file, qualified_name)` — a stronger key than `(file, name)` because it disambiguates same-named methods in different classes. Mirrors static schema's Frame.qualified_name."
+        },
+        "module": {
+          "type": "string",
+          "description": "Phase F1b. Containing module / package name, e.g. `orders.service`. Sourced from the frame's `f_globals['__name__']`. Mirrors static schema's Frame.module."
+        },
+        "language": {
+          "type": "string",
+          "description": "Source language for this frame. Always 'python' for frames produced by this profiler. Mirrors static schema's Frame.language."
+        },
+        "is_native": {
+          "type": "boolean",
+          "description": "Whether this is a native (C/C++/etc.) frame. Always false — this profiler emits Python-level frames; the C++ SIGPROF extension also returns Python frames via the interpreter API. Mirrors static schema's Frame.is_native."
+        },
+        "is_system": {
+          "type": "boolean",
+          "description": "True iff the agent-skip filter (BUILTIN_EXCLUDE_PATHS + STRICT_USER_CODE_EXCLUDE_PATHS, see client.py) would classify this frame as stdlib / runtime / profiler-self. Same source of truth as `_should_exclude`, just exposed as a per-frame label. Mirrors static schema's Frame.is_system."
+        }
       }
     },
 
@@ -62,7 +83,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["wall_trace", "cpu_trace", "wall_profile", "cpu_profile", "function_call"],
+          "enum": ["wall_trace", "cpu_trace", "wall_profile", "cpu_profile", "function_call", "profile_metadata"],
           "description": "Discriminator. Use this to pick the matching $defs entry."
         },
         "time": {
@@ -247,6 +268,76 @@
           "line": 14,
           "duration_ns": 3284,
           "status": "ok"
+        }
+      ]
+    },
+
+    "ProfileMetadataEvent": {
+      "title": "ProfileMetadataEvent",
+      "description": "Phase F2. Session-header event emitted ONCE per `Client.start()`, before any sample event. Mirrors `drift-static-profiler/schema/profile.schema.json` top-level fields (`schema_version`, `mode`, `generator`) so a consumer reading the JSONL stream linearly gets the same metadata block a static profile carries — and a converter can emit an exact `profile.schema.json` document with `mode: \"sampled\"` from this header plus the sample events that follow.",
+      "type": "object",
+      "required": [
+        "type", "time", "service", "pod",
+        "mode", "schema_version", "service_id", "generator"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type":            { "const": "profile_metadata" },
+        "time":            { "type": "string", "format": "date-time", "description": "ISO-8601 UTC, microsecond precision, ending in 'Z'. Session-start instant." },
+        "service":         { "type": "string", "minLength": 1 },
+        "service_version": { "type": "string" },
+        "pod":             { "type": "string", "minLength": 1 },
+        "mode": {
+          "type": "string",
+          "enum": ["sampled"],
+          "description": "Mirrors `profile.schema.json::mode`. Always `sampled` for events produced by this runtime profiler; the static profiler emits `static`."
+        },
+        "schema_version": {
+          "type": "string",
+          "enum": ["1.0", "1.1"],
+          "description": "Mirrors `profile.schema.json::schema_version`. Bumped when the dynamic-side wire format changes."
+        },
+        "service_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Per-session UUID (hex, no dashes). Stays stable for every event in this JSONL stream; lets a deployment-wide consumer that aggregates across many pods dedup samples from the same Python process restart."
+        },
+        "generator": {
+          "type": "object",
+          "description": "Provenance block. Field shapes are 1:1 copies of `profile.schema.json::Generator` so the F4 converter is a trivial field copy.",
+          "required": ["tool", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "tool":         { "type": "string", "examples": ["driftdockerprofiler"] },
+            "version":      { "type": "string", "examples": ["0.0.1"] },
+            "host":         { "type": "string", "description": "Hostname from `platform.node()`; falls back to `pod`." },
+            "captured_at":  { "type": "string", "format": "date-time", "description": "ISO timestamp of session start. Same instant as `time` on the envelope; exists so the Generator block is self-contained." },
+            "source_root":  { "type": "string", "description": "`os.getcwd()` at session start. Same convention the static profiler uses, so a viewer can join on this key without translation." },
+            "language_versions": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "e.g. `{\"python\": \"3.11.7\"}`."
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "type": "profile_metadata",
+          "time": "2026-05-19T12:34:50.012345Z",
+          "service": "test-python-web-server",
+          "pod": "test-python-web-server-7d4c-xkqzn",
+          "mode": "sampled",
+          "schema_version": "1.0",
+          "service_id": "3b3ea4b98770428793e9127ebd561fd7",
+          "generator": {
+            "tool": "driftdockerprofiler",
+            "version": "0.0.1",
+            "host": "test-python-web-server-7d4c-xkqzn",
+            "captured_at": "2026-05-19T12:34:50.012345Z",
+            "source_root": "/app",
+            "language_versions": { "python": "3.11.7" }
+          }
         }
       ]
     },

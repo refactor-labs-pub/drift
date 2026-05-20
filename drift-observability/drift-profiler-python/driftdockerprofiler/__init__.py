@@ -34,14 +34,21 @@ number of samples that hit that stack.
 """
 
 import logging
+import os
 import sys
 
 from driftdockerprofiler import __version__ as version
-from driftdockerprofiler import profiler_json, schemas
+from driftdockerprofiler import filters, profiler_json, schemas
 from driftdockerprofiler.client import (
-    BUILTIN_EXCLUDE_PATHS,
     Client,
     cpu_profiling_available,
+)
+from driftdockerprofiler.filters import (
+    BUILTIN_EXCLUDE_PATHS,
+    STRICT_USER_CODE_EXCLUDE_PATHS,
+    TraceFilter,
+    is_internal_thread_name,
+    is_system_frame,
 )
 from driftdockerprofiler.profiler_json import (
     Builder,
@@ -59,6 +66,13 @@ from driftdockerprofiler.schemas import (
     schema_path,
     validate_event,
 )
+from driftdockerprofiler.sinks import (
+    JsonlFileSink,
+    Sink,
+    SupabaseRealtimeSink,
+    TeeSink,
+)
+from driftdockerprofiler.sinks import supabase as _supabase_sink
 from driftdockerprofiler.tracer import trace
 from driftdockerprofiler.writer import DEFAULT_OUTPUT_PATH, JsonlWriter
 
@@ -68,15 +82,24 @@ __all__ = [
     'Client',
     'DEFAULT_OUTPUT_PATH',
     'Frame',
+    'JsonlFileSink',
     'JsonlWriter',
     'Profile',
+    'STRICT_USER_CODE_EXCLUDE_PATHS',
     'Sample',
+    'Sink',
+    'SupabaseRealtimeSink',
+    'TeeSink',
+    'TraceFilter',
     'VALID_EVENT_TYPES',
     'ValidationError',
     'ValueType',
     'all_schemas',
     'cpu_profiling_available',
     'event_schema',
+    'filters',
+    'is_internal_thread_name',
+    'is_system_frame',
     'profiler_json',
     'schema_for',
     'schema_path',
@@ -104,6 +127,11 @@ def start(service=None,
           pod=None,
           builtin_exclude_paths=BUILTIN_EXCLUDE_PATHS,
           exclude_paths=(),
+          sink=None,
+          supabase_url=None,
+          supabase_api_key=None,
+          supabase_channel=None,
+          wall_strategy='all_threads',
           verbose=0):
   """Starts the profiler.
 
@@ -112,14 +140,21 @@ def start(service=None,
   going). Under the hood it builds a `Client`, calls `client.config(...)`,
   then `client.start()` — same two-phase pattern upstream documents.
 
+  Every setting follows the same resolution order: explicit kwarg →
+  environment variable → built-in default. Pass nothing and the
+  profiler reads everything from the environment; pass a kwarg and it
+  overrides whatever the environment says.
+
   Args:
     service: Service name. Must match
       '^[a-z0-9]([-a-z0-9_.]{0,253}[a-z0-9])?$'. Falls back to the
       GAE_SERVICE / K_SERVICE env vars.
     service_version: Optional version label stamped on every event.
       Falls back to GAE_VERSION / K_REVISION env vars.
-    output_path: JSONL file the agent appends to. Defaults to
-      `/tmp/drift/events.jsonl`. Parent directory is created if needed.
+    output_path: JSONL file the agent appends to. Falls back to the
+      `DRIFT_OUTPUT_PATH` env var, then to `/tmp/drift/events.jsonl`.
+      Parent directory is created if needed. Ignored when a Supabase
+      sink is built (kwargs/env supply URL + key).
     period_ms: Sampling interval (ms). Default 10.
     duration_ms: Length of each profile window (ms). After the window
       closes, every unique stack becomes one JSONL line. Default
@@ -144,6 +179,22 @@ def start(service=None,
       `builtin_exclude_paths`. Common case: keep the defaults and add
       a couple of project-specific patterns, e.g.
       `exclude_paths=('/sqlalchemy/', '/celery/')`.
+    sink: Pre-built `Sink`-protocol object. If given, wins outright —
+      the Supabase kwargs / env vars below are ignored. Use for
+      `TeeSink`, custom destinations, or test doubles.
+    supabase_url: Supabase project URL (e.g.
+      ``https://abc123.supabase.co``). Overrides the
+      ``SUPABASE_URL`` env var. When this + `supabase_api_key` both
+      resolve, the profiler switches into **broadcast mode** —
+      `SupabaseRealtimeSink` joins the channel and every event is
+      emitted as a Phoenix broadcast instead of being written to disk.
+    supabase_api_key: Supabase API key (publishable or service_role
+      JWT). Overrides ``SUPABASE_REALTIME_API_KEY``. Required (with
+      `supabase_url`) to enable broadcast mode.
+    supabase_channel: Channel name joined as ``realtime:<channel>``.
+      Overrides ``SUPABASE_REALTIME_CHANNEL``. Defaults to
+      ``drift-profiler-events`` when neither kwarg nor env supplies
+      one.
     verbose: Logging level. 0=error, 1=warning, 2=info, 3=debug.
 
   Raises:
@@ -168,6 +219,38 @@ def start(service=None,
            logging.DEBUG][min(verbose, 3)]
   logger.setLevel(level)
 
+  # output_path: kwarg → DRIFT_OUTPUT_PATH env → Client default.
+  # Resolved here (not in Client.config) so the precedence is uniform
+  # with the Supabase settings below.
+  if output_path is None:
+    output_path = os.environ.get('DRIFT_OUTPUT_PATH')
+
+  # Auto-wire Supabase if URL + API key are resolvable (kwarg or env)
+  # and no explicit sink was passed. Resolution order per setting:
+  #   1. Explicit kwarg (supabase_url / supabase_api_key /
+  #      supabase_channel).
+  #   2. Environment variable (SUPABASE_URL /
+  #      SUPABASE_REALTIME_API_KEY / SUPABASE_REALTIME_CHANNEL).
+  #   3. Default (channel only — defaults to
+  #      `drift-profiler-events`).
+  #
+  # Outer precedence:
+  #   1. Explicit `sink=` kwarg wins (anything goes — TeeSink, mocks).
+  #   2. Else, if URL + API key are both set, stream over WSS instead
+  #      of writing to file (broadcast mode).
+  #   3. Else, fall through to the legacy `JsonlFileSink(output_path)`
+  #      built inside `Client.config()`.
+  if sink is None:
+    sink = _supabase_sink.from_env(
+        supabase_url=supabase_url,
+        api_key=supabase_api_key,
+        channel=supabase_channel,
+    )
+    if sink is not None:
+      logger.info(
+          'driftdockerprofiler: Supabase URL + API key resolved — '
+          'streaming events over WSS instead of writing to file')
+
   _client = Client()
   _client.config(
       service=service,
@@ -181,6 +264,8 @@ def start(service=None,
       emit_mode=emit_mode,
       builtin_exclude_paths=builtin_exclude_paths,
       exclude_paths=exclude_paths,
+      sink=sink,
+      wall_strategy=wall_strategy,
   )
   logger.info('Cloud Profiler Python agent version: %s (local-file fork)',
               version.__version__)

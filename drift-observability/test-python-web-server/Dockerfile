@@ -19,11 +19,13 @@ WORKDIR /app
 COPY test-python-web-server/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Prebuilt driftdockerprofiler wheel — must match the runtime Python ABI
-# tag (cp311). The build job in Makefile / Tilt produces this file.
-COPY drift-profiler-python/dist/driftdockerprofiler-*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/driftdockerprofiler-*.whl && \
-    rm /tmp/driftdockerprofiler-*.whl && \
+# Prebuilt driftdockerprofiler wheel — must match the runtime Python
+# ABI tag (cp37). The build job in Makefile / Tilt produces this file.
+# Newer setuptools normalizes the dist name to `drift_docker_profiler`
+# (underscores per PEP 503), so the glob accepts both spellings.
+COPY drift-profiler-python/dist/drift*docker*profiler-*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/drift*docker*profiler-*.whl && \
+    rm /tmp/drift*docker*profiler-*.whl && \
     python -c "import driftdockerprofiler; \
 assert driftdockerprofiler.cpu_profiling_available(), \
     'native C++ extension did not load — wheel is broken'"

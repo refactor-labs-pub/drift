@@ -1,0 +1,484 @@
+name: drift-docker-profiler / release
+
+# Builds and publishes the `drift-docker-profiler` PyPI package
+# (sources live under drift-observability/drift-profiler-python/, import
+# name `driftdockerprofiler`). Triggered by any change to the package
+# directory on the `main` branch — that's the contract: "every commit
+# that touches the profiler re-runs the full build, and ships if the
+# version in __version__.py is new on PyPI".
+#
+# Pipeline:
+#   test     — pytest matrix (Python 3.10 → 3.14) on Ubuntu + macOS smoke.
+#              On 3.13+ setup.py drops the C++ ext (cframe + f_code
+#              changes in 3.13, opaque struct in 3.14) so the editable
+#              install is pure Python; pytest runs the wall sampler
+#              path only.
+#   build    — three wheel streams covering Python 3.7 → 3.14:
+#                A) cibuildwheel v3.4.x  → cp38-cp312 manylinux2014
+#                                          (platform wheels, C++ ext)
+#                B) cibuildwheel v2.23.3 → cp37 manylinux2014
+#                                          (platform wheel, C++ ext)
+#                C) python -m build       → py3-none-any.whl
+#                                          (universal, wall sampler only;
+#                                          serves 3.13+, macOS, Windows,
+#                                          aarch64)
+#              + sdist (always; ultimate fallback).
+#   publish  — main-branch only. Compares __version__.py against the
+#              PyPI JSON API; if the version isn't yet on PyPI, uploads
+#              via OIDC trusted publisher, tags
+#              `drift-docker-profiler-v<x.y.z>`, attaches artifacts to a
+#              GitHub Release. Idempotent — a re-run on the same version
+#              is a no-op.
+#
+# One-time setup (see drift-observability/drift-profiler-python/README.md):
+#   1. PyPI → Add trusted publisher with the values listed there.
+#   2. GitHub → Settings → Environments → New environment `pypi`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'drift-observability/drift-profiler-python/**'
+      - '.github/workflows/drift-profiler-python-release.yml'
+  pull_request:
+    paths:
+      - 'drift-observability/drift-profiler-python/**'
+      - '.github/workflows/drift-profiler-python-release.yml'
+  workflow_dispatch:
+
+# Serialize main-branch releases so back-to-back pushes can't race on
+# the git tag or the PyPI upload. PRs run in parallel.
+concurrency:
+  group: drift-profiler-python-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: drift-observability/drift-profiler-python
+
+jobs:
+  # ---------------------------------------------------------------------
+  # test — pytest matrix.
+  # ---------------------------------------------------------------------
+  test:
+    name: test / py${{ matrix.python }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 → 3.13 covers every Python version that's still receiving
+        # upstream security fixes as of 2026. 3.7/3.8/3.9 are EOL — wheels
+        # are still produced by cibuildwheel for 3.8/3.9, but we don't
+        # spin up a test runner for them (setup-python on ubuntu-24.04
+        # has to download EOL versions on-the-fly, which is flaky enough
+        # to keep blocking CI).
+        include:
+          - { os: ubuntu-latest, python: '3.10' }
+          - { os: ubuntu-latest, python: '3.11' }
+          - { os: ubuntu-latest, python: '3.12' }
+          - { os: ubuntu-latest, python: '3.13' }
+          - { os: ubuntu-latest, python: '3.14' }   # setup.py drops C++ ext here
+          - { os: macos-14,      python: '3.12' }   # macOS smoke (wall sampler only)
+          - { os: macos-14,      python: '3.14' }   # macOS smoke on the newest Python
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install build deps + project (editable)
+        run: |
+          python -m pip install --upgrade pip
+          # Editable install builds the C++ ext in place on Linux; pure-Python on macOS.
+          pip install -e '.[supabase]' pytest
+
+      - name: Run pytest
+        run: pytest -q
+
+  # ---------------------------------------------------------------------
+  # Wheel publishing strategy — `pip install drift-docker-profiler`
+  # must Just Work on every Python in 3.7-3.14, even from a slim image
+  # with no compiler. We hit three artifact streams to cover that:
+  #
+  #   A. build-wheels-modern   — Linux cp38-cp312, manylinux2014 only
+  #      (cibuildwheel v3.4.x). Platform wheels WITH the C++ CPU
+  #      sampler baked in. CPU profiling enabled on every mainstream
+  #      Python through 3.12, on any glibc>=2.17 distro (Debian
+  #      Bookworm/Bullseye, Ubuntu 20.04+, RHEL 7+, Amazon Linux 2 /
+  #      2023). Both manylinux+musllinux build by default in
+  #      cibuildwheel v3; we skip musllinux until the SIGPROF+musl
+  #      path is end-to-end tested on Alpine (Alpine users still get
+  #      the universal wheel — wall sampler only).
+  #
+  #   B. build-wheels-cp37     — Linux cp37 manylinux2014 only
+  #      (cibuildwheel v2.23.3). cibuildwheel v3 dropped 3.7; v2 is
+  #      pinned here so the cp37 path doesn't fall through to the
+  #      sdist (which needs gcc on the user's machine — fatal for
+  #      python:3.7-slim). v2 also builds musllinux by default; we
+  #      skip it for the same reason as the modern job.
+  #
+  #   C. build-wheel-universal — py3-none-any, built on Python 3.14.
+  #      setup.py drops the C++ ext when running on 3.13+ (CPython 3.13
+  #      removed `PyThreadState->cframe` and renamed
+  #      `_PyInterpreterFrame->f_code` to `f_executable`; 3.14 went
+  #      further and made the struct opaque). Result is a universal
+  #      wheel that pip prefers for 3.13, 3.14, macOS, Windows,
+  #      aarch64 Linux — anywhere we don't ship a platform wheel. Wall
+  #      sampler still works; CPU sampler reports unavailable.
+  #
+  #   + build-sdist            — always shipped; ultimate fallback. On
+  #     Python 3.13+ the sdist is buildable without a compiler
+  #     (setup.py skips C++); on 3.7-3.12 it still needs gcc/g++.
+  #
+  # Resulting pip selection on a fresh interpreter:
+  #
+  #     cp37        Linux x86_64 → cp37 wheel    (CPU + wall)
+  #     cp38-cp312  Linux x86_64 → cpN  wheel    (CPU + wall)
+  #     cp313+      anywhere     → universal     (wall only)
+  #     macOS / win / aarch64    → universal     (wall only)
+  # ---------------------------------------------------------------------
+
+  build-wheels-modern:
+    name: build / wheels cp38-cp312 (manylinux x86_64)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build wheels with cibuildwheel v3
+        uses: pypa/cibuildwheel@v3.4.1
+        env:
+          # x86_64 only — aarch64 needs QEMU emulation (~10x slower) and
+          # isn't a hot-path for our users yet. The universal wheel
+          # serves aarch64 today (wall-only).
+          CIBW_ARCHS_LINUX: x86_64
+          # cibuildwheel v3 default = cp38..cp313 × {manylinux, musllinux}.
+          # That's 10 builds for x86_64 alone. We narrow to manylinux2014
+          # by skipping:
+          #   - cp37            → handled by the separate v2.23.3 job below.
+          #   - cp313           → CPython 3.13 removed `PyThreadState->cframe`
+          #                       AND renamed `_PyInterpreterFrame->f_code`
+          #                       to `f_executable`. populate_frames.cc
+          #                       references both directly and won't compile.
+          #                       setup.py's `_rule_cpython_lt_313` matches
+          #                       this cutoff — 3.13 falls through to the
+          #                       universal wheel.
+          #   - cp314           → handled by the universal wheel job below.
+          #   - cp3??t          → free-threaded / no-GIL; C++ ext not
+          #                       validated under no-GIL semantics.
+          #   - pp*             → PyPy; C++ ext is CPython-specific.
+          #   - *-musllinux_*   → musl libc / Alpine. The C++ ext uses
+          #                       `-static-libstdc++ -static-libgcc` which
+          #                       was originally added for Alpine compat,
+          #                       but SIGPROF + musl + Python integration
+          #                       hasn't been end-to-end tested on a real
+          #                       Alpine container yet. Alpine users get
+          #                       the universal wheel (wall sampler only)
+          #                       until we ship + verify musllinux in a
+          #                       follow-up release.
+          CIBW_SKIP: 'cp37-* cp313-* cp314-* cp3??t-* pp* *-musllinux_*'
+          # Pin manylinux2014 (glibc >= 2.17, RHEL 7+, Debian 8+) instead
+          # of cibuildwheel v3's new default of manylinux_2_28 (glibc 2.28,
+          # RHEL 8+). The broader compat surface costs us nothing.
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_TEST_COMMAND: >-
+            python -c "import driftdockerprofiler;
+            assert driftdockerprofiler.cpu_profiling_available(),
+            'cpu profiler extension failed to load';
+            print('OK', driftdockerprofiler.__version__.__version__)"
+        with:
+          package-dir: drift-observability/drift-profiler-python
+          output-dir: drift-observability/drift-profiler-python/wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-modern
+          path: drift-observability/drift-profiler-python/wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-wheels-cp37:
+    name: build / wheels cp37 (manylinux x86_64)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build cp37 wheel with cibuildwheel v2
+        # cibuildwheel v3 removed 3.7. v2.23.3 is the last release that
+        # can build cp37 manylinux wheels; pinned here so the version
+        # never drifts. Note: cibuildwheel v2 also builds musllinux by
+        # default, so CIBW_SKIP must filter it out (same rationale as
+        # the modern job — Alpine isn't end-to-end tested yet).
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_BUILD: 'cp37-*'
+          CIBW_SKIP: '*-musllinux_*'
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_TEST_COMMAND: >-
+            python -c "import driftdockerprofiler;
+            assert driftdockerprofiler.cpu_profiling_available(),
+            'cpu profiler extension failed to load on cp37';
+            print('OK', driftdockerprofiler.__version__.__version__)"
+        with:
+          package-dir: drift-observability/drift-profiler-python
+          output-dir: drift-observability/drift-profiler-python/wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cp37
+          path: drift-observability/drift-profiler-python/wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-wheel-universal:
+    name: build / wheel universal (py3-none-any, no C++ ext)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.14 is the build host: setup.py's `_rule_cpython_lt_313`
+          # short-circuits the C++ ext build on any interpreter >= 3.13,
+          # so `python -m build --wheel` produces a `py3-none-any` wheel
+          # without ever invoking gcc. We pick 3.14 specifically because
+          # it's the newest interpreter we test against — any 3.13+
+          # interpreter would produce the same universal artifact, but
+          # using the newest catches forward-incompat breakage early.
+          python-version: '3.14'
+
+      - name: Build universal wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir wheelhouse
+          ls -la wheelhouse
+          # Sanity: wheel filename MUST end with `py3-none-any.whl` —
+          # otherwise we accidentally compiled a platform wheel and
+          # the wheel selection logic falls apart.
+          ls wheelhouse | grep -E 'py3-none-any\.whl$' \
+            || { echo "::error::expected py3-none-any wheel, got something else"; exit 1; }
+
+      - name: Smoke-install in a clean python:3.14-slim container
+        run: |
+          docker run --rm -v "$PWD/wheelhouse":/wh:ro python:3.14-slim \
+            sh -c 'pip install --quiet /wh/*.whl && \
+                   python -c "import driftdockerprofiler; \
+                              print(\"universal wheel OK on 3.14-slim, cpu=\", \
+                              driftdockerprofiler.cpu_profiling_available())"'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-universal
+          # actions/upload-artifact resolves `path` relative to
+          # $GITHUB_WORKSPACE, NOT the job's `defaults.run.working-directory`.
+          # The wheel was built into the subdir's wheelhouse — give the
+          # full repo-rooted path or the upload silently finds nothing
+          # and fails with `if-no-files-found: error`.
+          path: drift-observability/drift-profiler-python/wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: build / sdist
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --outdir dist
+
+      - name: Validate metadata
+        run: |
+          python -m pip install twine
+          twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: drift-observability/drift-profiler-python/dist/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # publish — main-branch only, gated on the version in __version__.py
+  # being newer than the latest release on PyPI. Idempotent.
+  # ---------------------------------------------------------------------
+  publish:
+    name: publish / PyPI
+    needs:
+      - build-wheels-modern
+      - build-wheels-cp37
+      - build-wheel-universal
+      - build-sdist
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Match the value entered into the PyPI trusted-publisher form.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/drift-docker-profiler
+    permissions:
+      id-token: write   # OIDC token used by gh-action-pypi-publish
+      contents: write   # needed for tagging + creating GitHub Releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tag check needs full history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Read package version from __version__.py
+        id: version
+        run: |
+          ver=$(python -c "exec(open('driftdockerprofiler/__version__.py').read()); print(__version__)")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=drift-docker-profiler-v$ver" >> "$GITHUB_OUTPUT"
+          echo "::notice::Package version: $ver"
+
+      - name: Check if version is already published on PyPI
+        id: pypi
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # PyPI JSON API:
+          #   - 200 + .releases keys when the project exists
+          #   - 404 the very first time we ship (project doesn't exist yet)
+          # We treat 404 as "not yet on PyPI" so the bootstrap publish proceeds.
+          #
+          # This replaces `pip index versions`, which only reports the LATEST
+          # release on its first output line — so it would miss the case
+          # where our $VERSION is published but a newer one is already out
+          # (rolling back to a hot-fix branch, etc.).
+          http_code=$(curl -sSL -o /tmp/pypi.json -w '%{http_code}' \
+            "https://pypi.org/pypi/drift-docker-profiler/json")
+          echo "PyPI JSON API returned HTTP $http_code"
+          if [ "$http_code" = "200" ] && \
+             jq -e --arg v "$VERSION" '.releases | has($v)' /tmp/pypi.json >/dev/null; then
+            echo "already_published=true"  >> "$GITHUB_OUTPUT"
+            echo "::notice::Version $VERSION is already on PyPI — skipping publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version $VERSION is not yet on PyPI — proceeding."
+          fi
+
+      # Three wheel artifact streams + the sdist all land in `dist/`
+      # together. PyPI accepts the bundle as one upload; pip's resolver
+      # then picks the most specific compatible wheel per interpreter
+      # (cp37 → cp37 wheel, cp38-cp312 → cpN wheel, 3.13+ → universal).
+      - name: Download cp38-cp312 wheels
+        if: steps.pypi.outputs.already_published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-modern
+          path: dist
+
+      - name: Download cp37 wheel
+        if: steps.pypi.outputs.already_published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-cp37
+          path: dist
+
+      - name: Download universal wheel
+        if: steps.pypi.outputs.already_published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-universal
+          path: dist
+
+      - name: Download sdist
+        if: steps.pypi.outputs.already_published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: List artifacts
+        if: steps.pypi.outputs.already_published == 'false'
+        working-directory: ${{ github.workspace }}
+        run: ls -la dist/
+
+      - name: Publish to PyPI (OIDC trusted publisher)
+        if: steps.pypi.outputs.already_published == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ github.workspace }}/dist
+          # Belt + suspenders: silently no-op if a previous run beat us
+          # to the upload. The PyPI-version check above is the primary
+          # guard; this is the fallback.
+          skip-existing: true
+
+      - name: Tag the release commit
+        if: steps.pypi.outputs.already_published == 'false'
+        working-directory: ${{ github.workspace }}
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Configure a bot identity for the tag — the workflow's
+          # default actor is `github-actions[bot]`.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already on origin — skipping tag creation"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Extract changelog entry for this version
+        if: steps.pypi.outputs.already_published == 'false'
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          notes_file="$RUNNER_TEMP/notes.md"
+          # Pull just the section for THIS version out of CHANGELOG.md.
+          # Section header format: `## <version>`.
+          awk -v v="$VERSION" '
+            $0 ~ "^## "v"([ ]|$)" { p=1; next }
+            p && /^## / { exit }
+            p { print }
+          ' CHANGELOG.md > "$notes_file" || true
+          if [ ! -s "$notes_file" ]; then
+            echo "No CHANGELOG.md entry for $VERSION — falling back to a stub." > "$notes_file"
+            echo "" >> "$notes_file"
+            echo "Install: \`pip install drift-docker-profiler==$VERSION\`" >> "$notes_file"
+          fi
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release with artifacts
+        if: steps.pypi.outputs.already_published == 'false'
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN:   ${{ github.token }}
+          TAG:        ${{ steps.version.outputs.tag }}
+          VERSION:    ${{ steps.version.outputs.version }}
+          NOTES_FILE: ${{ steps.notes.outputs.file }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — refreshing assets"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "drift-docker-profiler $VERSION" \
+              --notes-file "$NOTES_FILE" \
+              dist/*
+          fi

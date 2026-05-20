@@ -44,11 +44,12 @@ def test_schema_loads_as_json():
 # --------------------------------------------------------------- public api
 
 def test_event_schema_returns_union():
-    """The union covers the four sampler events PLUS the deterministic
-    tracer's `function_call`. Five variants total."""
+    """The union covers the four sampler events, the deterministic
+    tracer's `function_call`, and the F2 `profile_metadata`
+    session-header. Six variants total."""
     s = schemas.event_schema()
     assert s["oneOf"]
-    assert len(s["oneOf"]) == 5
+    assert len(s["oneOf"]) == 6
 
 
 def test_event_schema_copy_is_deep():

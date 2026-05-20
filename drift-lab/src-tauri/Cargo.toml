@@ -29,6 +29,32 @@ futures-util = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
 
+# Supabase Realtime subscriber (Phase B+C). Phoenix Channels protocol over
+# WSS — pure JSON frames, no custom subprotocol — so a generic WS client
+# is all we need. `rustls-tls-webpki-roots` matches the rest of the crate's
+# TLS posture (reqwest already uses rustls + webpki-roots), so we don't
+# pull in OpenSSL transitively. `native-tls` would force a system OpenSSL
+# dep at build/runtime which we'd then have to ship.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+# rustls 0.23 requires a process-wide CryptoProvider to be installed
+# before any TLS handshake. tokio-tungstenite uses rustls under the
+# `rustls-tls-webpki-roots` feature above but does NOT install a
+# provider — so the first connect_async panics with "Could not
+# automatically determine the process-level CryptoProvider". We add
+# rustls as a direct dep with the `aws-lc-rs` feature and install it
+# lazily inside `realtime::infra::tungstenite_transport`. Affects both
+# the desktop app and the `realtime_smoke` example.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+# Folder fingerprinting: derive a stable filename-safe id from an
+# absolute path so per-folder data (static scans + active event_logs)
+# can live under `~/.drift/scans/<fingerprint>/`. Both crates are
+# already transitively present; pulling them in as direct deps lets us
+# call them by name. `sha2` for the hash, `hex` for hex-encoding the
+# truncated digest.
+sha2 = "0.10"
+hex = "0.4"
+
 # LLM client. Every supported runtime (cloud or local) speaks OpenAI-compat
 # HTTP, so a single `rig::providers::openai::Client` handles them all —
 # drift-lab itself runs no inference. Local runtimes (Ollama, LM Studio,

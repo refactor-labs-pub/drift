@@ -1,5 +1,6 @@
 //! Shared app state held by Tauri's `State` registry.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -8,6 +9,14 @@ use tokio_util::sync::CancellationToken;
 use crate::app_config::AppConfig;
 use crate::backend::ResolvedBackend;
 use crate::event_log_commands::LiveScans;
+use crate::event_source_commands::RealtimeStreams;
+
+/// Registry of in-flight realtime *test* operations. Key is the
+/// renderer-generated `testId`, value is the token a Stop click cancels.
+/// Distinct from `realtime_streams` (which tracks long-lived
+/// subscriptions) because the test is a one-shot — it lifecycles
+/// differently (no file-tail aggregator paired with it).
+pub type RealtimeTests = Arc<Mutex<HashMap<String, CancellationToken>>>;
 use crate::events::BackendStatus;
 use crate::history::Conversation;
 use crate::model_config::ModelBackend;
@@ -76,6 +85,21 @@ pub struct AppState {
     /// next tick. Shared with the (future) shutdown path so quitting the
     /// app cancels every in-flight tail at once.
     pub live_event_scans: LiveScans,
+
+    /// Phase C: Supabase Realtime subscriber registry, `stream_id` →
+    /// (`wss_token`, `live_scan_id`, `log_path`). One entry per active
+    /// stream. `stop_realtime_event_stream` cancels the WSS token AND
+    /// the paired entry in `live_event_scans` so the UI only needs to
+    /// call one stop command.
+    pub realtime_streams: RealtimeStreams,
+
+    /// In-flight realtime test commands keyed by `testId`. The Stop
+    /// button in Settings / Active Scan resolves to
+    /// `cancel_realtime_test(testId)`, which cancels this token; the
+    /// transport's `select!` arm wakes within one poll cycle. Empty
+    /// in steady state — entries live only for the duration of a
+    /// single connect+join test.
+    pub realtime_tests: RealtimeTests,
 }
 
 impl AppState {
@@ -93,6 +117,8 @@ impl AppState {
             shutdown: CancellationToken::new(),
             tray_available: Arc::new(AtomicBool::new(false)),
             live_event_scans: Arc::new(Mutex::new(Default::default())),
+            realtime_streams: Arc::new(Mutex::new(Default::default())),
+            realtime_tests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

@@ -11,3 +11,9 @@ action/node_modules/
 /dist/
 drift-static-profiler/research/code-production-repositories
 drift-static-profiler/research/django-check
+
+# Local environment files — credentials, project URLs, etc. Each
+# subproject has a committed `.env.example` showing the shape; the
+# real `.env` stays out of git.
+.env
+**/.env

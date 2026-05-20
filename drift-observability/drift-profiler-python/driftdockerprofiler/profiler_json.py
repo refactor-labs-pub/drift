@@ -119,7 +119,8 @@ class Builder:
                        pod='',
                        service_version='',
                        cpu=0.0,
-                       memory_bytes=0):
+                       memory_bytes=0,
+                       is_system_predicate=None):
     """Build the underlying `Profile` from raw traces.
 
     Args:
@@ -133,10 +134,42 @@ class Builder:
       time_ns: Window-end timestamp (ns). Defaults to `time.time_ns()`.
       service / pod / service_version: Optional labels stamped on
         the Profile (and therefore on every emitted line).
+      is_system_predicate: Phase F1a. Optional ``(file: str) -> bool``
+        callback. When supplied, every emitted frame gains
+        ``language='python'``, ``is_native=False``, and ``is_system``
+        derived from the predicate — matching the static profiler's
+        ``Frame`` schema for join-by-key consumers. When ``None``
+        (the back-compat default), frames are emitted in the legacy
+        ``{name, file, line}`` shape via the ``Frame`` dataclass.
     """
     samples: List[Sample] = []
     for trace, count in traces.items():
-      frames = [Frame(name=f[0], file=f[1], line=f[2]) for f in trace]
+      # Phase F1a + F1b: when enrichment is requested OR the input
+      # has F1b's wider 5-tuple shape, emit plain dicts that carry
+      # the optional fields. The Frame dataclass intentionally
+      # doesn't model the new fields — adding them as
+      # ``Optional[...] = None`` would serialize them as ``null`` in
+      # every emitted bundle (asdict has no way to drop None), which
+      # would break the "additive schema" promise. Bypassing the
+      # dataclass for the enriched path keeps absent fields absent.
+      first = trace[0] if trace else ()
+      has_f1b_shape = len(first) >= 5
+      if is_system_predicate is None and not has_f1b_shape:
+        frames = [Frame(name=f[0], file=f[1], line=f[2]) for f in trace]
+      else:
+        frames = []
+        for f in trace:
+          d = {'name': f[0], 'file': f[1], 'line': f[2]}
+          if len(f) >= 5:
+            if f[3]:
+              d['qualified_name'] = f[3]
+            if f[4]:
+              d['module'] = f[4]
+          if is_system_predicate is not None:
+            d['language'] = 'python'
+            d['is_native'] = False
+            d['is_system'] = bool(is_system_predicate(f[1]))
+          frames.append(d)
       icount = int(count)
       samples.append(Sample(
           count=icount,
